@@ -1,0 +1,27 @@
+# Aurelix — production overrides: multi-stage builds, no bind mounts, restart always
+name: aurelix
+services:
+  backend:
+    build:
+      target: production
+    restart: always
+    volumes: []
+    command: sh -c "node scripts/db-migrate.cjs && node dist/index.js"
+    environment:
+      NODE_ENV: production
+  frontend:
+    build:
+      target: production
+    restart: always
+    volumes: []
+    environment:
+      API_HOST: backend
+    command: ["node", "preview-server.mjs"]
+  postgres:
+    restart: always
+    ports: []
+  redis:
+    restart: always
+    ports: []
+  nginx:
+    restart: always

@@ -1,0 +1,12 @@
+# Aurelix — explicit dev overrides (hot reload, verbose logs)
+name: aurelix
+services:
+  backend:
+    build:
+      target: development
+    environment:
+      NODE_ENV: development
+      LOG_LEVEL: debug
+  frontend:
+    build:
+      target: development

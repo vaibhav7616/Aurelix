@@ -1,0 +1,103 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; }
+html, body, #root { height: 100%; }
+body {
+  @apply bg-base-950 text-ink1 font-sans antialiased;
+  background-image: radial-gradient(rgba(246, 241, 228, 0.055) 1px, transparent 1.1px);
+  background-size: 22px 22px;
+  letter-spacing: -0.006em;
+}
+::selection { background: rgba(95, 168, 120, 0.35); }
+
+/* thin dark scrollbars */
+* { scrollbar-width: thin; scrollbar-color: #354135 transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: #354135; border-radius: 4px; }
+*::-webkit-scrollbar-thumb:hover { background: #4C5B4A; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+@layer components {
+  /* ── surfaces ─────────────────────────────── */
+  .ax-panel { @apply bg-base-900 border border-line rounded shadow-panel; }
+  .ax-raised { @apply bg-base-850 border border-line rounded; }
+  .ax-well { @apply bg-black/30 border border-line rounded; }
+  .ax-micro { @apply text-[10px] font-semibold uppercase tracking-[0.14em] text-mute; }
+  .ax-num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+  .ax-rule { @apply border-t border-line; }
+
+  /* ── forms ────────────────────────────────── */
+  .ax-label { @apply block text-[10px] font-semibold uppercase tracking-[0.1em] text-fog mb-1.5; }
+  .ax-input { @apply w-full h-9 bg-base-800 border border-line rounded px-3 text-[13px] text-ink1 outline-none transition placeholder:text-mute/80 hover:border-base-600 focus:border-accent-400; }
+  select.ax-input { @apply pr-8 cursor-pointer; }
+  .ax-check { @apply w-3.5 h-3.5 rounded accent-[#35855A]; }
+
+  /* ── buttons ──────────────────────────────── */
+  .ax-btn { @apply inline-flex items-center justify-center gap-1.5 h-9 px-4 rounded text-[13px] font-semibold transition select-none disabled:opacity-45 disabled:pointer-events-none whitespace-nowrap; }
+  .ax-btn-sm { @apply h-7 px-2.5 text-xs rounded; }
+  .ax-btn-primary { @apply ax-btn bg-accent-600 text-cream hover:bg-accent-500 active:bg-accent-700; }
+  .ax-btn-buy { @apply ax-btn bg-accent-600 text-cream hover:bg-accent-500 active:bg-accent-700; }
+  .ax-btn-sell { @apply ax-btn bg-down text-cream hover:brightness-110 active:brightness-95; }
+  .ax-btn-ghost { @apply ax-btn bg-white/[0.03] border border-line text-ink1 hover:bg-white/[0.07] active:bg-white/[0.05]; }
+  .ax-btn-danger { @apply ax-btn bg-downdim border border-down/40 text-down hover:bg-down/20; }
+  .ax-btn-quiet { @apply inline-flex items-center gap-1.5 text-xs font-medium text-fog hover:text-ink1 transition px-2 py-1.5 rounded; }
+
+  /* ── tabs & segments ──────────────────────── */
+  .ax-wtab { @apply relative px-3 h-10 text-[11px] font-semibold uppercase tracking-[0.08em] text-mute hover:text-fog transition flex items-center gap-1.5; }
+  .ax-wtab[data-active="true"] { @apply text-ink1; }
+  .ax-wtab[data-active="true"]::after { content: ""; @apply absolute bottom-0 left-2 right-2 h-[2px] bg-accent-400 rounded-full; }
+  .ax-seg { @apply flex bg-black/30 border border-line rounded p-0.5 gap-0.5; }
+  .ax-seg-btn { @apply flex-1 px-2 h-7 text-[11px] font-semibold text-mute rounded hover:text-ink1 transition; }
+  .ax-seg-btn[data-active="true"] { @apply bg-base-700 text-ink1 shadow-panel; }
+  .ax-pill { @apply px-2 h-6 text-[11px] font-medium text-mute rounded hover:text-ink1 hover:bg-white/[0.06] transition; }
+  .ax-pill[data-active="true"] { @apply text-accent-300 bg-accent-500/15; }
+
+  /* ── tables ───────────────────────────────── */
+  .ax-th { @apply text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-mute px-2.5 py-2 whitespace-nowrap border-b border-line bg-base-900 sticky top-0 z-10; }
+  .ax-td { @apply px-2.5 py-[7px] text-xs border-b border-white/[0.06] whitespace-nowrap; }
+  .ax-row { @apply hover:bg-white/[0.03] transition-colors; }
+
+  /* ── badges & status ──────────────────────── */
+  .ax-live-dot { @apply w-1.5 h-1.5 rounded-full bg-up inline-block; }
+  .ax-side-buy { @apply text-[10px] font-bold px-1.5 py-[3px] rounded bg-up/15 text-up; }
+  .ax-side-sell { @apply text-[10px] font-bold px-1.5 py-[3px] rounded bg-down/15 text-down; }
+  .ax-tag { @apply text-[10px] font-semibold px-1.5 py-[3px] rounded bg-white/[0.07] text-fog; }
+
+  /* ── marketing ────────────────────────────── */
+  .ax-h1 { @apply font-display font-medium tracking-[-0.01em] text-ink1; }
+  .ax-lead { @apply text-fog leading-relaxed; }
+  .ax-card-hover { @apply transition hover:border-base-600 hover:shadow-pop; }
+  .ax-eyebrow { @apply text-[11px] font-semibold uppercase tracking-[0.22em] text-fog; }
+  .ax-cta-band { @apply bg-accent-600 text-cream rounded shadow-pop; }
+}
+
+/* price flash on tick — subtle background fade only */
+@keyframes axFlashUp { 0% { background-color: rgba(60, 177, 121, 0.22); } 100% { background-color: transparent; } }
+@keyframes axFlashDown { 0% { background-color: rgba(212, 105, 78, 0.22); } 100% { background-color: transparent; } }
+.flash-up { animation: axFlashUp 0.5s ease-out; border-radius: 3px; }
+.flash-down { animation: axFlashDown 0.5s ease-out; border-radius: 3px; }
+
+/* ticker tape */
+@keyframes axTape { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+.tape-track { animation: axTape 45s linear infinite; }
+.tape-track:hover { animation-play-state: paused; }
+
+/* auth backdrop — dotted glow */
+.auth-grid {
+  background-image: radial-gradient(rgba(246, 241, 228, 0.09) 1px, transparent 1.2px);
+  background-size: 18px 18px;
+  mask-image: radial-gradient(ellipse 80% 70% at 50% 40%, black 20%, transparent 75%);
+}
+
+.skeleton { @apply animate-pulse bg-white/[0.06] rounded; }
+.draw-active { cursor: crosshair !important; }
+.draw-active * { cursor: crosshair !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }

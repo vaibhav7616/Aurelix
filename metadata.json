@@ -1,0 +1,6 @@
+{
+  "name": "Aurelix — Trading Terminal",
+  "description": "High-performance fixed-time binary options trading terminal with real-time rolling OTC candles, instant execution, and wallet ledger.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
