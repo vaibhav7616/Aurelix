@@ -9,8 +9,8 @@ const r = Router();
 // Feed status for top bars / ops consoles (provider identity, symbols, server time)
 r.get('/status', ah(async (_req, res) => {
   const provider = getProvider();
-  const { demoProvider } = await import('../services/marketService');
-  const symbols = demoProvider()?.getSymbols() ?? [];
+  const { demoProvider, realProvider } = await import('../services/marketService');
+  const symbols = realProvider()?.getSymbols() ?? demoProvider()?.getSymbols() ?? ['BTC/USD', 'ETH/USD', 'EUR/USD', 'GBP/USD', 'USD/JPY', 'XAU/USD'];
   const ticks = await provider.getTicks(symbols).catch(() => []);
   res.json({
     success: true,
@@ -26,8 +26,9 @@ r.get('/status', ah(async (_req, res) => {
   });
 }));
 
-r.get('/tick/:symbol', ah(async (req, res) => {
-  const t = await getProvider().getTick(req.params.symbol);
+r.get('/tick/:symbol(*)', ah(async (req, res) => {
+  const sym = req.params.symbol || String(req.query.symbol ?? '');
+  const t = await getProvider().getTick(sym);
   if (!t) { res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'No tick for symbol' } }); return; }
   res.json({ success: true, data: t, error: null });
 }));

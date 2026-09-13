@@ -20,7 +20,7 @@ export const env = {
   FRONTEND_URL: process.env.FRONTEND_URL ?? 'http://localhost:5173',
   CORS_ORIGINS: (process.env.CORS_ORIGINS ?? process.env.FRONTEND_URL ?? 'http://localhost:5173,http://localhost,http://127.0.0.1:5173,http://127.0.0.1')
     .split(',').map((s) => s.trim()).filter(Boolean),
-  MARKET_PROVIDER: process.env.MARKET_PROVIDER ?? 'demo',
+  MARKET_PROVIDER: process.env.MARKET_PROVIDER ?? 'real',
   PAYMENT_PROVIDER: process.env.PAYMENT_PROVIDER ?? 'demo',
   DEMO_STARTING_BALANCE: parseInt(process.env.DEMO_STARTING_BALANCE ?? '10000', 10),
   DEMO_TICK_INTERVAL_MS: parseInt(process.env.DEMO_TICK_INTERVAL_MS ?? '40', 10),

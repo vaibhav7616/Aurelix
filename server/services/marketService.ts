@@ -1,7 +1,7 @@
 // MarketService — owns provider lifecycle, tick fan-out, candle reads.
 import { env } from '../config/env';
 import { DemoMarketProvider } from '../market/DemoMarketProvider';
-import { ExternalMarketProviderStub } from '../market/ExternalMarketProvider';
+import { RealMarketProvider } from '../market/RealMarketProvider';
 import { MarketDataProvider, Tick } from '../market/MarketDataProvider';
 import { onMarketTick } from '../trading/slTpMonitor';
 import { settleExpired } from '../trading/optionsEngine';
@@ -11,14 +11,14 @@ let provider: MarketDataProvider | null = null;
 
 export function getProvider(): MarketDataProvider {
   if (!provider) {
-    provider = env.MARKET_PROVIDER === 'external' ? new ExternalMarketProviderStub() : new DemoMarketProvider(env.DEMO_TICK_INTERVAL_MS);
+    provider = env.MARKET_PROVIDER === 'demo' ? new DemoMarketProvider(env.DEMO_TICK_INTERVAL_MS) : new RealMarketProvider();
     provider.onTick((t: Tick) => {
       broadcastTick(t);
       void onMarketTick(t).catch(() => undefined);
       void settleExpired().catch(() => undefined);
     });
-    if (provider instanceof DemoMarketProvider) {
-      provider.onCandle((c, event) => {
+    if ('onCandle' in provider && typeof (provider as any).onCandle === 'function') {
+      (provider as any).onCandle((c: any, event: any) => {
         emitCandle(c.symbol, { candle: c, event });
       });
     }
@@ -35,4 +35,8 @@ export async function stopMarket(): Promise<void> {
 export function demoProvider(): DemoMarketProvider | null {
   const p = getProvider();
   return p instanceof DemoMarketProvider ? p : null;
+}
+export function realProvider(): RealMarketProvider | null {
+  const p = getProvider();
+  return p instanceof RealMarketProvider ? p : null;
 }
