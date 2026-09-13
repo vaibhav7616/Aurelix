@@ -39,3 +39,12 @@ export function shortId(id: string, len = 8): string {
   if (!id) return '';
   return id.length > len ? `${id.slice(0, len)}…` : id;
 }
+
+export function fmtCompact(val: number | null | undefined): string {
+  if (val === null || val === undefined || Number.isNaN(val)) return '0';
+  const abs = Math.abs(val);
+  if (abs >= 1e9) return `${(val / 1e9).toFixed(2)}B`;
+  if (abs >= 1e6) return `${(val / 1e6).toFixed(2)}M`;
+  if (abs >= 1e3) return `${(val / 1e3).toFixed(1)}K`;
+  return val.toLocaleString('en-US');
+}
