@@ -305,11 +305,11 @@ export function PriceChart() {
     const hasOsc = inds.osc !== 'none';
     chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.08, bottom: hasOsc ? 0.32 : inds.vol ? 0.14 : 0.08 } });
 
-    // Sub-pip resolution (200 steps per pip) allows lightweight-charts to render sub-pixel floating-point coordinates at 120Hz+
+    // Quotex-style sub-pip resolution with strictly bounded minMove
     const pip = /JPY/.test(symbol) ? 0.001 : /BTC|ETH/.test(symbol) ? 0.01 : 0.00001;
     const priceFormatCustom: DeepPartial<PriceFormatCustom> = {
       type: 'custom',
-      minMove: pip * 0.005,
+      minMove: pip,
       formatter: (p: BarPrice) => fmtPrice(Number(p)),
     };
 
@@ -518,7 +518,13 @@ export function PriceChart() {
       // Quotex micro-breathing: subtle sub-pip organic oscillation so the candle head breathes realistically like an electronic matching engine
       const microTime = timestamp * 0.006;
       const microJitter = (Math.sin(microTime) * 0.6 + Math.sin(microTime * 2.3) * 0.4) * (pip * 0.08);
-      const curPrice = Number((currentPrice + microJitter).toFixed(/JPY/.test(symbol) ? 3 : /BTC|ETH/.test(symbol) ? 2 : 5));
+      let curPrice = Number((currentPrice + microJitter).toFixed(/JPY/.test(symbol) ? 3 : /BTC|ETH/.test(symbol) ? 2 : 5));
+
+      // Hard sanity guard against numerical explosion or NaN
+      if (!Number.isFinite(curPrice) || curPrice <= 0 || (lastCandle.close > 0 && Math.abs(curPrice - lastCandle.close) > lastCandle.close * 0.15)) {
+        curPrice = targetPrice > 0 ? targetPrice : lastCandle.close;
+        currentPriceRef.current = curPrice;
+      }
 
       const tfMs = tfToMs(timeframe);
       const bucket = Math.floor(now / tfMs) * tfMs;

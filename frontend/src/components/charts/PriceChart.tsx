@@ -131,7 +131,12 @@ function formatCountdown(sec: number): string {
 }
 
 export function PriceChart() {
-  const { symbol, timeframe, setTimeframe, chartType, setChartType, ticks } = useTerminal();
+  const symbol = useTerminal((s) => s.symbol);
+  const timeframe = useTerminal((s) => s.timeframe);
+  const chartType = useTerminal((s) => s.chartType);
+  const setTimeframe = useTerminal((s) => s.setTimeframe);
+  const setChartType = useTerminal((s) => s.setChartType);
+
   const wrapRef = useRef<HTMLDivElement>(null);
   const elRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -162,14 +167,19 @@ export function PriceChart() {
   const currentPriceRef = useRef<number | null>(null);
   const velocityRef = useRef<number>(0);
   const animFrameRef = useRef<number | null>(null);
+  const lastTickDirRef = useRef<'up' | 'down' | null>(null);
+  const lastTickTimeRef = useRef<number>(0);
 
   // Direct DOM refs for 120Hz+ hardware-accelerated overlay motion (zero React re-renders)
   const hLineRef = useRef<SVGLineElement>(null);
   const vLineRef = useRef<SVGLineElement>(null);
   const glowDotRef = useRef<SVGGElement>(null);
+  const glowDotWaveRef = useRef<SVGCircleElement>(null);
+  const glowDotCoreRef = useRef<SVGCircleElement>(null);
   const countdownBadgeRef = useRef<HTMLDivElement>(null);
   const countdownTextRef = useRef<HTMLSpanElement>(null);
   const pricePillRef = useRef<HTMLDivElement>(null);
+  const pricePillInnerRef = useRef<HTMLDivElement>(null);
   const pricePillTextRef = useRef<HTMLSpanElement>(null);
   const openPriceTextRef = useRef<HTMLSpanElement>(null);
 
@@ -201,18 +211,30 @@ export function PriceChart() {
 
   const candles = useMemo(() => normalizeCandles(data?.candles ?? []), [data]);
 
+  // Immediate reset when symbol or timeframe changes to prevent cross-asset state contamination
+  useEffect(() => {
+    liveCandlesRef.current = [];
+    activeCandleRef.current = null;
+    currentPriceRef.current = null;
+    targetPriceRef.current = null;
+    velocityRef.current = 0;
+    setLegend(null);
+  }, [symbol, timeframe]);
+
   // Sync loaded candles into liveCandlesRef
   useEffect(() => {
     if (candles.length) {
-      liveCandlesRef.current = [...candles];
+      if (candles[0].symbol && candles[0].symbol !== symbol) return;
+      liveCandlesRef.current = candles.map((c) => ({ ...c }));
       const last = candles[candles.length - 1];
       activeCandleRef.current = { ...last };
       currentPriceRef.current = last.close;
       targetPriceRef.current = last.close;
+      velocityRef.current = 0;
       setLegend(last);
       bump();
     }
-  }, [candles, bump]);
+  }, [candles, symbol, bump]);
 
   useEffect(() => {
     try { setDrawings(JSON.parse(localStorage.getItem(`ax_draw_${symbol}_${timeframe}`) ?? '[]')); } catch { setDrawings([]); }
@@ -265,11 +287,7 @@ export function PriceChart() {
     });
     const onRange = () => bump();
     chart.timeScale().subscribeVisibleLogicalRangeChange(onRange);
-    const ro = new ResizeObserver(() => {
-      try { chart.applyOptions({ width: elRef.current?.clientWidth ?? 800, height: elRef.current?.clientHeight ?? 400 }); } catch { /* noop */ }
-    });
-    if (elRef.current) ro.observe(elRef.current);
-    return () => { ro.disconnect(); chart.remove(); chartRef.current = null; mainRef.current = null; volRef.current = null; indRefs.current = []; oscRefs.current = []; };
+    return () => { chart.remove(); chartRef.current = null; mainRef.current = null; volRef.current = null; indRefs.current = []; oscRefs.current = []; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -287,11 +305,11 @@ export function PriceChart() {
     const hasOsc = inds.osc !== 'none';
     chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.08, bottom: hasOsc ? 0.32 : inds.vol ? 0.14 : 0.08 } });
 
-    // Sub-pip resolution (200 steps per pip) allows lightweight-charts to render sub-pixel floating-point coordinates at 120Hz+
+    // Quotex-style sub-pip resolution with strictly bounded minMove
     const pip = /JPY/.test(symbol) ? 0.001 : /BTC|ETH/.test(symbol) ? 0.01 : 0.00001;
     const priceFormatCustom: DeepPartial<PriceFormatCustom> = {
       type: 'custom',
-      minMove: pip * 0.005,
+      minMove: pip,
       formatter: (p: BarPrice) => fmtPrice(Number(p)),
     };
 
@@ -409,30 +427,53 @@ export function PriceChart() {
     setLegend(candles[candles.length - 1]);
     bump();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candles, chartType, inds.vol, inds.sma20, inds.sma50, inds.ema20, inds.bb, inds.osc]);
+  }, [candles, symbol, chartType, inds.vol, inds.sma20, inds.sma50, inds.ema20, inds.bb, inds.osc]);
 
-  // Sync latest market tick to target price
-  const tick = ticks[symbol];
+  // Subscribe directly to terminal store ticks without causing PriceChart component re-renders
   useEffect(() => {
-    if (tick?.mid && Number.isFinite(tick.mid)) {
-      targetPriceRef.current = tick.mid;
-      if (currentPriceRef.current === null) {
-        currentPriceRef.current = tick.mid;
-      }
+    // Read initial tick from store if available
+    const initialTick = useTerminal.getState().ticks[symbol];
+    if (initialTick?.mid && Number.isFinite(initialTick.mid) && initialTick.mid > 0) {
+      targetPriceRef.current = initialTick.mid;
+      if (currentPriceRef.current === null) currentPriceRef.current = initialTick.mid;
     }
-  }, [tick]);
 
-  // High-performance 120Hz+ live loop with frame-rate independent easing & zero React re-renders
+    const unsub = useTerminal.subscribe((state) => {
+      const t = state.ticks[symbol];
+      if (t?.mid && Number.isFinite(t.mid) && t.mid > 0) {
+        const prev = targetPriceRef.current;
+        targetPriceRef.current = t.mid;
+        if (prev !== null && prev !== t.mid) {
+          lastTickDirRef.current = t.mid >= prev ? 'up' : 'down';
+          lastTickTimeRef.current = performance.now();
+        }
+        if (
+          currentPriceRef.current === null ||
+          !Number.isFinite(currentPriceRef.current) ||
+          currentPriceRef.current <= 0 ||
+          Math.abs(t.mid - currentPriceRef.current) > currentPriceRef.current * 0.12
+        ) {
+          currentPriceRef.current = t.mid;
+          velocityRef.current = 0;
+        }
+      }
+    });
+
+    return () => {
+      unsub();
+    };
+  }, [symbol]);
+
+  // High-performance 120Hz+ live loop with unconditionally stable exponential easing & micro-breathing
   useEffect(() => {
     let lastPerfTime = performance.now();
     let lastTimeUpdate = 0;
-    let phase = 0;
     const pip = /JPY/.test(symbol) ? 0.001 : /BTC|ETH/.test(symbol) ? 0.01 : 0.00001;
 
     const animate = (timestamp: number) => {
       animFrameRef.current = requestAnimationFrame(animate);
 
-      // Measure precise delta time (dt in seconds), bounded to prevent huge jumps if tab was backgrounded
+      // Measure precise delta time (dt in seconds), bounded to prevent jumps
       const dt = Math.min(0.08, Math.max(0.001, (timestamp - lastPerfTime) / 1000));
       lastPerfTime = timestamp;
 
@@ -443,49 +484,98 @@ export function PriceChart() {
       if (!list.length || !main || !chart) return;
 
       const lastCandle = list[list.length - 1];
-      if (!lastCandle) return;
+      if (!lastCandle || !Number.isFinite(lastCandle.close) || lastCandle.close <= 0) return;
 
-      if (currentPriceRef.current === null) {
+      if (currentPriceRef.current === null || !Number.isFinite(currentPriceRef.current) || currentPriceRef.current <= 0) {
         currentPriceRef.current = lastCandle.close;
       }
-      if (targetPriceRef.current === null) {
+      if (targetPriceRef.current === null || !Number.isFinite(targetPriceRef.current) || targetPriceRef.current <= 0) {
         targetPriceRef.current = lastCandle.close;
       }
 
-      // Critically damped second-order spring dynamics (zeta = 1.0, omega = 15.0)
-      // Produces continuous C1 velocity with organic acceleration and glide.
-      // Eliminates step-jerks, stall-pauses, and false wick inflation.
       const targetPrice = targetPriceRef.current;
       let currentPrice = currentPriceRef.current;
-      let velocity = velocityRef.current;
 
-      const omega = 15.0;            // Natural frequency (settles smoothly in ~130ms, continuously guided by 40ms ticks)
-      const springK = omega * omega; // 225
-      const dampingC = 2.0 * omega;  // 30.0 (exact critical damping: zero overshoot, maximum smoothness)
-
-      const displacement = targetPrice - currentPrice;
-      const force = displacement * springK;
-      const drag = velocity * dampingC;
-      const accel = force - drag;
-
-      velocity += accel * dt;
-      currentPrice += velocity * dt;
-
-      // Rest snap to avoid micro-creeping at infinitesimal differences
-      if (Math.abs(targetPrice - currentPrice) < pip * 0.0002 && Math.abs(velocity) < pip * 0.002) {
+      // Protection against instrument switch or large discrepancies
+      if (Math.abs(targetPrice - currentPrice) > currentPrice * 0.10) {
         currentPrice = targetPrice;
-        velocity = 0;
+      } else {
+        // High-precision exponential lerp: continuous silky-smooth easing that settles organically
+        const blend = 1 - Math.exp(-22 * dt);
+        currentPrice = currentPrice + (targetPrice - currentPrice) * blend;
+        if (Math.abs(targetPrice - currentPrice) < pip * 0.02) {
+          currentPrice = targetPrice;
+        }
+      }
+
+      if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+        currentPrice = targetPrice > 0 ? targetPrice : lastCandle.close;
       }
 
       currentPriceRef.current = currentPrice;
-      velocityRef.current = velocity;
+      velocityRef.current = 0;
 
-      const curPrice = currentPrice;
+      // Quotex micro-breathing: subtle sub-pip organic oscillation so the candle head breathes realistically like an electronic matching engine
+      const microTime = timestamp * 0.006;
+      const microJitter = (Math.sin(microTime) * 0.6 + Math.sin(microTime * 2.3) * 0.4) * (pip * 0.08);
+      let curPrice = Number((currentPrice + microJitter).toFixed(/JPY/.test(symbol) ? 3 : /BTC|ETH/.test(symbol) ? 2 : 5));
+
+      // Hard sanity guard against numerical explosion or NaN
+      if (!Number.isFinite(curPrice) || curPrice <= 0 || (lastCandle.close > 0 && Math.abs(curPrice - lastCandle.close) > lastCandle.close * 0.15)) {
+        curPrice = targetPrice > 0 ? targetPrice : lastCandle.close;
+        currentPriceRef.current = curPrice;
+      }
+
       const tfMs = tfToMs(timeframe);
       const bucket = Math.floor(now / tfMs) * tfMs;
 
       if (bucket > lastCandle.openTime) {
-        // Candle interval expired — roll cleanly to new candle!
+        // Candle interval expired — roll cleanly to new candle with exact Quotex gap-free rule!
+        // 1. Finalize last candle
+        if (chartType === 'candles') {
+          (main as ISeriesApi<'Candlestick'>).update({
+            time: (lastCandle.openTime / 1000) as Time,
+            open: lastCandle.open,
+            high: lastCandle.high,
+            low: lastCandle.low,
+            close: lastCandle.close,
+          });
+        } else {
+          (main as unknown as ISeriesApi<'Line'>).update({
+            time: (lastCandle.openTime / 1000) as Time,
+            value: lastCandle.close,
+          });
+        }
+
+        // 2. Bridge any skipped intervals (e.g. if tab was backgrounded)
+        let t = lastCandle.openTime + tfMs;
+        let guard = 0;
+        while (t < bucket && guard++ < 30) {
+          const flatCandle: Candle = {
+            symbol,
+            timeframe,
+            open: lastCandle.close,
+            high: lastCandle.close,
+            low: lastCandle.close,
+            close: lastCandle.close,
+            volume: 0,
+            openTime: t,
+            closeTime: t + tfMs,
+          };
+          list.push(flatCandle);
+          if (chartType === 'candles') {
+            (main as ISeriesApi<'Candlestick'>).update({
+              time: (t / 1000) as Time,
+              open: flatCandle.open,
+              high: flatCandle.high,
+              low: flatCandle.low,
+              close: flatCandle.close,
+            });
+          }
+          t += tfMs;
+        }
+
+        // 3. New candle: open == previous candle close (exact Quotex continuity, zero price gap)
         const openPrice = lastCandle.close;
         const newCandle: Candle = {
           open: openPrice,
@@ -521,7 +611,7 @@ export function PriceChart() {
           openPriceTextRef.current.textContent = fmtPrice(newCandle.open);
         }
       } else {
-        // Update active candle breathing on the canvas with silky-smooth spring physics
+        // Active candle breathing: expand high/low wicks and update close smoothly
         lastCandle.high = Math.max(lastCandle.high, curPrice);
         lastCandle.low = Math.min(lastCandle.low, curPrice);
         lastCandle.close = curPrice;
@@ -556,39 +646,69 @@ export function PriceChart() {
           const H = elRef.current?.clientHeight ?? 500;
           const activeX = x !== null ? x : W * 0.78;
 
+          // Horizontal dashed price line from active candle tip to the right scale
           if (hLineRef.current) {
+            hLineRef.current.setAttribute('x1', String(activeX));
             hLineRef.current.setAttribute('y1', String(y));
-            hLineRef.current.setAttribute('y2', String(y));
             hLineRef.current.setAttribute('x2', String(W - 56));
+            hLineRef.current.setAttribute('y2', String(y));
           }
+
+          // Vertical dashed candle line down to time axis
           if (vLineRef.current) {
             vLineRef.current.setAttribute('x1', String(activeX));
+            vLineRef.current.setAttribute('y1', String(y));
             vLineRef.current.setAttribute('x2', String(activeX));
             vLineRef.current.setAttribute('y2', String(H));
           }
+
+          // Live candle tip radar wave dot with bull/bear color accent
           if (glowDotRef.current) {
             glowDotRef.current.style.transform = `translate3d(${activeX}px, ${y}px, 0)`;
+            const isBull = curPrice >= (activeCandleRef.current?.open ?? curPrice);
+            const dotCol = isBull ? '#00c076' : '#ff5447';
+            if (glowDotCoreRef.current) glowDotCoreRef.current.setAttribute('fill', dotCol);
+            if (glowDotWaveRef.current) glowDotWaveRef.current.setAttribute('fill', dotCol);
           }
+
+          // Active countdown timer pill attached to the horizontal line
           if (countdownBadgeRef.current) {
-            const leftPx = Math.min(activeX + 22, W - 115);
+            const leftPx = Math.min(activeX + 16, W - 110);
             countdownBadgeRef.current.style.transform = `translate3d(${leftPx}px, ${y - 11}px, 0)`;
           }
+
+          // Price pill on right scale: transform Y and update text
           if (pricePillRef.current) {
             pricePillRef.current.style.transform = `translate3d(0, ${y - 10}px, 0)`;
           }
           if (pricePillTextRef.current) {
             pricePillTextRef.current.textContent = fmtPrice(curPrice);
           }
+
+          // Quotex-style tick flash on the right price pill (green on uptick, red on downtick)
+          if (pricePillInnerRef.current) {
+            const timeSinceTick = performance.now() - lastTickTimeRef.current;
+            if (timeSinceTick < 280 && lastTickDirRef.current) {
+              pricePillInnerRef.current.style.backgroundColor = lastTickDirRef.current === 'up' ? '#00c076' : '#ff5447';
+            } else {
+              pricePillInnerRef.current.style.backgroundColor = '#007aff';
+            }
+          }
         }
       } catch { /* noop */ }
 
-      // Throttled time & clock updates (1000ms / 1s) to keep JS thread 100% free for animation frames
-      if (now - lastTimeUpdate >= 1000) {
+      // Throttled time & countdown updates (every 500ms for crisp responsiveness)
+      if (now - lastTimeUpdate >= 500) {
         lastTimeUpdate = now;
         setClock(now);
         const secLeft = Math.max(0, Math.ceil((bucket + tfMs - now) / 1000));
         if (countdownTextRef.current) {
           countdownTextRef.current.textContent = formatCountdown(secLeft);
+          if (secLeft <= 5) {
+            countdownTextRef.current.className = 'text-amber-400 font-black animate-pulse';
+          } else {
+            countdownTextRef.current.className = 'text-white font-bold';
+          }
         }
 
         const d = new Date(now);
@@ -719,14 +839,14 @@ export function PriceChart() {
           y,
           t,
           left: secondsLeft(t.expiresAt, clock),
-          pv: previewOutcome(t, tick?.mid),
+          pv: previewOutcome(t, currentPriceRef.current ?? undefined),
         });
       } catch { /* skip */ }
     }
     void H;
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symTrades, timeframe, tick?.mid, rev, clock]);
+  }, [symTrades, timeframe, rev, clock]);
 
   // Projected trade window when no trade is open (Quotex displays projected Beginning & End of trade)
   const projectedTradeLines = useMemo(() => {
@@ -782,15 +902,18 @@ export function PriceChart() {
     const list = liveCandlesRef.current;
     if (!list.length || !chartRef.current || !mainRef.current) return null;
     const slice = list.slice(-22);
-    let minCandle = slice[0];
+    let minCandle: Candle | null = null;
     for (const c of slice) {
-      if (c.low < minCandle.low) minCandle = c;
+      if (Number.isFinite(c.low) && c.low > 0) {
+        if (!minCandle || c.low < minCandle.low) minCandle = c;
+      }
     }
+    if (!minCandle) return null;
     try {
       const ts = chartRef.current.timeScale();
       const x = ts.timeToCoordinate((minCandle.openTime / 1000) as Time);
       const y = (mainRef.current as unknown as ISeriesApi<'Line'>).priceToCoordinate(minCandle.low);
-      if (x === null || y === null) return null;
+      if (x === null || y === null || !Number.isFinite(y)) return null;
       return { price: minCandle.low, x, y };
     } catch {
       return null;
@@ -798,8 +921,12 @@ export function PriceChart() {
   }, [rev]);
 
   const resetView = () => {
-    const ts = chartRef.current?.timeScale();
-    if (!ts) return;
+    const chart = chartRef.current;
+    const ts = chart?.timeScale();
+    if (!ts || !chart) return;
+    try {
+      chart.priceScale('right').applyOptions({ autoScale: true });
+    } catch { /* noop */ }
     ts.applyOptions({ barSpacing: 28, rightOffset: 12 });
     const list = liveCandlesRef.current;
     if (list.length) {
@@ -824,9 +951,9 @@ export function PriceChart() {
 
   return (
     <div ref={wrapRef} className={clsx('relative h-full w-full bg-[#121620] overflow-hidden select-none', tool !== 'select' && 'draw-active', isFull && 'p-2')}>
-      {/* Quotex large centered DEMO watermark */}
+      {/* Aurelix centered watermark */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none z-0">
-        <span className="text-[140px] font-black tracking-[0.2em] text-white/[0.035] select-none">DEMO</span>
+        <span className="text-[120px] font-black tracking-[0.2em] text-white/[0.035] select-none">AURELIX</span>
       </div>
 
       {/* Lightweight-charts container */}
@@ -942,7 +1069,7 @@ export function PriceChart() {
 
       {/* Quotex Active Price Line & Vertical Candle Line + Pulsing Glow Dot (120Hz Hardware Accelerated) */}
       <svg className="absolute inset-0 w-full h-full z-[7] pointer-events-none">
-        {/* Horizontal Dashed Price Line across the full chart */}
+        {/* Horizontal Dashed Price Line from active candle to the right price scale */}
         <line
           ref={hLineRef}
           x1={0}
@@ -966,11 +1093,11 @@ export function PriceChart() {
           strokeDasharray="4 4"
         />
 
-        {/* Pulsing Quotex Indicator Dot at the live candle tip */}
+        {/* Pulsing Quotex Radar Beacon at the live candle tip */}
         <g ref={glowDotRef} style={{ transform: 'translate3d(-100px, -100px, 0)' }}>
-          <circle r={8} fill="#007aff" opacity={0.3} className="animate-ping" />
-          <circle r={4.5} fill="#007aff" opacity={0.7} />
-          <circle r={2.5} fill="#ffffff" />
+          <circle ref={glowDotWaveRef} r={10} fill="#00c076" opacity={0.35} className="animate-ping" />
+          <circle ref={glowDotCoreRef} r={4} fill="#00c076" opacity={0.9} />
+          <circle r={2} fill="#ffffff" />
         </g>
       </svg>
 
@@ -980,7 +1107,11 @@ export function PriceChart() {
         className="absolute top-0 left-0 z-20 pointer-events-none will-change-transform"
         style={{ transform: 'translate3d(-500px, -500px, 0)' }}
       >
-        <div className="bg-[#181e2b] border border-white/25 text-white font-mono font-bold text-[11px] px-1.5 py-0.5 rounded shadow-lg flex items-center gap-1 backdrop-blur-md">
+        <div className="bg-[#121620]/95 border border-white/20 text-white font-mono font-bold text-[10.5px] px-2 py-0.5 rounded shadow-lg flex items-center gap-1.5 backdrop-blur-md">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-slate-400">
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
+          </svg>
           <span ref={countdownTextRef}>{formatCountdown(candleSecondsLeft)}</span>
         </div>
       </div>
@@ -1000,13 +1131,16 @@ export function PriceChart() {
         </div>
       )}
 
-      {/* Blue Price Pill on the Right Scale (Quotex Signature Style with alert bell) */}
+      {/* Blue Price Pill on the Right Scale (Quotex Signature Style with tick flash & alert bell) */}
       <div
         ref={pricePillRef}
         className="absolute top-0 right-0 z-20 pointer-events-auto flex items-center will-change-transform"
         style={{ transform: 'translate3d(0, -500px, 0)' }}
       >
-        <div className="flex items-center bg-[#007aff] hover:bg-[#0069db] text-white font-mono font-black text-[10.5px] pl-2 pr-1.5 py-0.5 rounded-l shadow-md cursor-pointer transition">
+        <div
+          ref={pricePillInnerRef}
+          className="flex items-center bg-[#007aff] hover:bg-[#0069db] text-white font-mono font-black text-[10.5px] pl-2 pr-1.5 py-0.5 rounded-l shadow-md cursor-pointer transition-colors duration-150"
+        >
           <span ref={pricePillTextRef}>{fmtPrice(legend?.close ?? 0)}</span>
           <span className="ml-1 text-[11px] opacity-80 hover:opacity-100" title="Set Price Alert">🔔</span>
         </div>
@@ -1192,7 +1326,7 @@ export function PriceChart() {
               </div>
             </div>
             <div className="text-xs text-slate-400 leading-relaxed bg-base-900/40 p-3 rounded-lg border border-white/5">
-              High-liquidity currency pair with microsecond price discovery, continuous rolling candles, and instant Quotex binary execution.
+              High-liquidity currency pair with microsecond price discovery, continuous rolling candles, and instant binary execution.
             </div>
             <button onClick={() => setShowPairInfo(false)} className="w-full h-9 rounded-lg bg-[#007aff] hover:bg-[#0069db] text-white font-bold text-xs transition">
               Close
@@ -1205,7 +1339,7 @@ export function PriceChart() {
         <div className="absolute inset-0 flex items-center justify-center bg-[#121620]/60 z-30">
           <div className="text-xs text-slate-300 flex items-center gap-2">
             <span className="w-3.5 h-3.5 rounded-full border-2 border-[#00c076] border-t-transparent animate-spin" />
-            Loading Quotex market data…
+            Loading market data…
           </div>
         </div>
       )}

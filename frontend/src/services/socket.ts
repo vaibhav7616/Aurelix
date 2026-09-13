@@ -9,8 +9,7 @@ let socket: Socket | null = null;
 let subscribed: string[] = [];
 
 export function connectSocket(): Socket {
-  if (socket?.connected) return socket;
-  socket?.removeAllListeners();
+  if (socket) return socket;
   socket = io(WS_URL || undefined, {
     auth: { token: getAccessToken() },
     // start with long-polling (works through any proxy) and upgrade to websocket when possible —
