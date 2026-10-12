@@ -18,7 +18,8 @@ async function main(): Promise<void> {
   console.log('[seed] seeding Aurelix development data...');
 
   for (const a of ASSETS) {
-    await prisma.asset.upsert({ where: { symbol: a.symbol }, update: { ...a, enabled: true }, create: { ...a, enabled: true } });
+    // create-only: never overwrite payout %, enabled flag etc. that an admin changed (seed runs on every boot)
+    await prisma.asset.upsert({ where: { symbol: a.symbol }, update: {}, create: { ...a, enabled: true } });
   }
 
   await prisma.riskRule.upsert({

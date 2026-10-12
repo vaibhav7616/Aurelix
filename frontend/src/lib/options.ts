@@ -19,6 +19,34 @@ export interface OptionTrade {
   accountId: string;
 }
 
+/** Pending trade (execution by price): opens a regular trade when the quote reaches targetPrice. */
+export interface PendingTrade {
+  id: string;
+  symbol: string;
+  direction: Direction;
+  stake: number;
+  durationSec: number;
+  targetPrice: number;
+  triggerAbove: boolean;
+  status: 'PENDING' | 'EXECUTED' | 'CANCELLED' | 'EXPIRED' | 'FAILED';
+  createdAt: string;
+  validUntil: string;
+  optionId: string | null;
+  reason: string | null;
+  accountId: string;
+}
+
+/** Expiry modes (Quotex "SWITCH TIME"): TIMER = duration from open, TIME = fixed clock minute. */
+export type ExpiryMode = 'TIMER' | 'TIME';
+export const FIXED_TIME_MIN_LEAD_SEC = 30;
+
+/** Earliest whole-minute expiry that is still open for purchase at `now` (server clock). */
+export function nextFixedExpiry(now: number, minLeadSec = FIXED_TIME_MIN_LEAD_SEC): number {
+  let t = Math.ceil(now / 60_000) * 60_000;
+  if (t - now < minLeadSec * 1000) t += 60_000;
+  return t;
+}
+
 export interface OptionsConfig {
   durations: number[];
   minDurationSec: number;
@@ -26,6 +54,9 @@ export interface OptionsConfig {
   minStake?: number;
   maxStake?: number;
   serverTime: number;
+  /** Time mode: purchases for a clock expiry close this many seconds before it */
+  fixedTimeMinLeadSec?: number;
+  pendingValidityMs?: number;
   assets: Array<{ symbol: string; payoutPct: number; minStake: number; maxStake: number; enabled: boolean }>;
 }
 

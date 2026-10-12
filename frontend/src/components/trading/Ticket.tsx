@@ -1,16 +1,22 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { get, post, apiError } from '../../lib/api';
-import { useTerminal } from '../../stores/terminalStore';
+import { useTerminal, serverNow } from '../../stores/terminalStore';
 import { useUI } from '../../stores/uiStore';
 import { fmtMoney, fmtPrice } from '../../lib/format';
-import { fmtHMS, payoutFor, DURATION_PRESETS, type OptionsConfig, type OptionTrade, type Direction } from '../../lib/options';
+import { fmtHMS, payoutFor, DURATION_PRESETS, nextFixedExpiry, FIXED_TIME_MIN_LEAD_SEC, type OptionsConfig, type OptionTrade, type PendingTrade, type Direction, type ExpiryMode } from '../../lib/options';
 import { getAssetMeta } from '../../lib/assetMeta';
 import { soundService } from '../../lib/sound';
 import { FieldError } from '../ui/primitives';
 import { clsx } from 'clsx';
 
-interface Account { id: string; balance: number; accountNumber: string; accountType: string }
+interface Account { id: string; balance: number; lockedBalance?: number; accountNumber: string; accountType: string }
+
+const MAX_FIXED_AHEAD_MS = 4 * 3600_000;
+function fmtClock(ms: number): string {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
 
 const STAKE_STEPS = [1, 5, 10, 25, 50, 100];
 
@@ -41,6 +47,20 @@ export function Ticket() {
   const [err, setErr] = useState<string | null>(null);
   const [flash, setFlash] = useState<Direction | null>(null);
 
+  // Expiry mode (Quotex "SWITCH TIME"): TIMER = duration from open, TIME = fixed clock minute
+  const [mode, setMode] = useState<ExpiryMode>(() => (localStorage.getItem('ax_opt_mode') === 'TIME' ? 'TIME' : 'TIMER'));
+  const [fixedExpiry, setFixedExpiry] = useState<number>(() => nextFixedExpiry(serverNow()));
+  useEffect(() => { localStorage.setItem('ax_opt_mode', mode); }, [mode]);
+  // purchases for a minute close FIXED_TIME_MIN_LEAD_SEC before it — roll forward like Quotex does
+  useEffect(() => {
+    if (mode !== 'TIME') return;
+    const t = setInterval(() => {
+      const min = nextFixedExpiry(serverNow(), cfg?.fixedTimeMinLeadSec ?? FIXED_TIME_MIN_LEAD_SEC);
+      setFixedExpiry((cur) => (cur < min ? min : cur));
+    }, 500);
+    return () => clearInterval(t);
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => { localStorage.setItem('ax_opt_dur', String(durationSec)); }, [durationSec]);
   useEffect(() => { localStorage.setItem('ax_opt_stake', String(stake)); }, [stake]);
 
@@ -55,7 +75,11 @@ export function Ticket() {
 
   const open = useMutation({
     mutationFn: (direction: Direction) =>
-      post<OptionTrade & { balance: number }>('/api/v1/options', { accountId: account?.id, symbol, direction, stake, durationSec }, { 'Idempotency-Key': crypto.randomUUID() }),
+      post<OptionTrade & { balance: number }>(
+        '/api/v1/options',
+        { accountId: account?.id, symbol, direction, stake, ...(mode === 'TIME' ? { expiresAt: fixedExpiry } : { durationSec }) },
+        { 'Idempotency-Key': crypto.randomUUID() },
+      ),
     onSuccess: (o) => {
       soundService.playTradePlaced();
       setErr(null);
@@ -72,15 +96,45 @@ export function Ticket() {
     },
   });
 
-  const handleMinusTime = () => { soundService.playClick(); setDurationSec((d) => nextPreset(d, -1)); };
-  const handlePlusTime = () => { soundService.playClick(); setDurationSec((d) => nextPreset(d, 1)); };
+  const placePending = useMutation({
+    mutationFn: (direction: Direction) =>
+      post<PendingTrade>('/api/v1/options/pending', { accountId: account?.id, symbol, direction, stake, durationSec, targetPrice: Number(targetPrice) }),
+    onSuccess: (p) => {
+      soundService.playTradePlaced();
+      setErr(null);
+      push('ok', `Pending ${p.direction === 'UP' ? '▲ Up' : '▼ Down'} ${p.symbol} · ${fmtMoney(p.stake)} · opens when price ${p.triggerAbove ? 'rises to' : 'falls to'} ${fmtPrice(p.targetPrice)}`);
+      ['pending', 'accounts'].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+    },
+    onError: (e) => {
+      const m = apiError(e);
+      setErr(m);
+      push('err', m);
+    },
+  });
+
+  const submit = (direction: Direction) => {
+    if (!pendingTrade) { open.mutate(direction); return; }
+    if (mode === 'TIME') { setErr('Pending trades use Timer mode — press SWITCH TIME'); return; }
+    const tp = Number(targetPrice);
+    if (!targetPrice || !Number.isFinite(tp) || tp <= 0) { setErr('Enter the target price for the pending trade'); return; }
+    placePending.mutate(direction);
+  };
+
+  const shiftFixed = (dir: 1 | -1) => setFixedExpiry((cur) => {
+    const now = serverNow();
+    const min = nextFixedExpiry(now, cfg?.fixedTimeMinLeadSec ?? FIXED_TIME_MIN_LEAD_SEC);
+    return Math.min(now + MAX_FIXED_AHEAD_MS, Math.max(min, cur + dir * 60_000));
+  });
+  const handleMinusTime = () => { soundService.playClick(); if (mode === 'TIME') shiftFixed(-1); else setDurationSec((d) => nextPreset(d, -1)); };
+  const handlePlusTime = () => { soundService.playClick(); if (mode === 'TIME') shiftFixed(1); else setDurationSec((d) => nextPreset(d, 1)); };
   const handleMinusStake = () => { soundService.playClick(); setStake((s) => stepStake(s, -1)); };
   const handlePlusStake = () => { soundService.playClick(); setStake((s) => stepStake(s, 1)); };
 
   const minS = meta?.minStake ?? cfg?.minStake ?? 1;
   const maxS = meta?.maxStake ?? cfg?.maxStake ?? 50000;
-  const invalid = !account || (meta && !meta.enabled) || stake <= 0 || stake < minS || stake > maxS || stake > (account?.balance ?? 0);
-  const busy = open.isPending;
+  const available = (account?.balance ?? 0) - (account?.lockedBalance ?? 0); // pending trades reserve their stake
+  const invalid = !account || (meta && !meta.enabled) || stake <= 0 || stake < minS || stake > maxS || stake > available;
+  const busy = open.isPending || placePending.isPending;
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-base-900 border-l border-line select-none">
@@ -124,8 +178,8 @@ export function Ticket() {
         {/* TIME STEPPER (Quotex signature style) */}
         <div className="bg-base-800/80 border border-line rounded-lg px-3 py-2.5">
           <div className="flex items-center justify-between text-[11px] text-mute font-medium mb-1.5">
-            <span>Time</span>
-            <button onClick={() => setShowTimePresets(!showTimePresets)} className="text-[10px] text-[#007aff] hover:underline font-semibold">
+            <span>{mode === 'TIME' ? 'Time' : 'Timer'}</span>
+            <button onClick={() => { soundService.playClick(); setShowTimePresets(false); setMode((m) => (m === 'TIME' ? 'TIMER' : 'TIME')); }} className="text-[10px] text-[#007aff] hover:underline font-semibold">
               SWITCH TIME
             </button>
           </div>
@@ -136,8 +190,11 @@ export function Ticket() {
             >
               −
             </button>
-            <div className="flex-1 text-center font-mono text-[17px] font-extrabold tracking-tight text-white">
-              {fmtHMS(durationSec)}
+            <div
+              onClick={() => { if (mode === 'TIMER') setShowTimePresets(!showTimePresets); }}
+              className={clsx('flex-1 text-center font-mono text-[17px] font-extrabold tracking-tight text-white', mode === 'TIMER' && 'cursor-pointer')}
+            >
+              {mode === 'TIME' ? fmtClock(fixedExpiry) : fmtHMS(durationSec)}
             </div>
             <button
               onClick={handlePlusTime}
@@ -146,7 +203,7 @@ export function Ticket() {
               +
             </button>
           </div>
-          {showTimePresets && (
+          {mode === 'TIMER' && showTimePresets && (
             <div className="grid grid-cols-6 gap-1 mt-2.5 pt-2 border-t border-line">
               {[5, 15, 30, 60, 300, 900].map((d) => (
                 <button
@@ -231,7 +288,7 @@ export function Ticket() {
         <div className="grid gap-2.5">
           {/* UP BUTTON: Green Quotex button with UP and Arrow */}
           <button
-            onClick={() => open.mutate('UP')}
+            onClick={() => submit('UP')}
             disabled={busy || !!invalid}
             className={clsx(
               'w-full h-12 rounded-lg bg-[#00c076] hover:bg-[#00d684] active:scale-[0.98] text-white font-black text-[15px] flex items-center justify-between px-5 transition shadow-lg',
@@ -246,7 +303,7 @@ export function Ticket() {
 
           {/* DOWN BUTTON: Red Quotex button with DOWN and Arrow */}
           <button
-            onClick={() => open.mutate('DOWN')}
+            onClick={() => submit('DOWN')}
             disabled={busy || !!invalid}
             className={clsx(
               'w-full h-12 rounded-lg bg-[#ff5447] hover:bg-[#ff685c] active:scale-[0.98] text-white font-black text-[15px] flex items-center justify-between px-5 transition shadow-lg',
@@ -260,8 +317,8 @@ export function Ticket() {
           </button>
         </div>
 
-        {invalid && account && stake > account.balance && (
-          <div className="text-[10px] text-[#ff5447] text-center font-medium">Investment exceeds balance ({fmtMoney(account.balance)}).</div>
+        {invalid && account && stake > available && (
+          <div className="text-[10px] text-[#ff5447] text-center font-medium">Investment exceeds available balance ({fmtMoney(available)}).</div>
         )}
         {invalid && meta && !meta.enabled && (
           <div className="text-[10px] text-[#ff5447] text-center font-medium">{symbol} is currently halted.</div>

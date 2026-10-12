@@ -1,519 +1,335 @@
-// RealMarketProvider — real live market data feed using Binance WebSocket/REST for crypto & metals, and real live Forex feeds.
+// RealMarketProvider — live market data for the fixed-time terminal.
+//
+//   • Crypto + gold: real exchange prices from Binance (public, no key).
+//       - history: Binance klines (1s klines aggregated for 5s/10s/15s/30s, native for 1m+)
+//       - live:    <pair>@aggTrade stream (every executed trade) + <pair>@miniTicker (24h open)
+//   • Forex: there is no free real-time FX feed, so FX pairs run as OTC markets (like
+//     Quotex OTC): the simulated tape of DemoMarketProvider, anchored to the real
+//     reference rate (ECB via frankfurter.dev) and re-anchored gently every hour.
+//
+// Everything else — the candle book for every timeframe, candle open/close events,
+// per-asset enable/disable from the admin deck, quote history for settlement — is the
+// shared engine in DemoMarketProvider, so the REST history, the socket stream and the
+// settlement price always come from ONE series.
+//
+// If Binance is unreachable a symbol falls back to the simulated tape (tick.demo = true)
+// so the platform keeps working; it switches back to live as soon as the feed recovers.
 import WebSocket from 'ws';
-import { Candle, MarketDataProvider, Tick, orderCandles } from './MarketDataProvider';
+import { AssetState, DemoMarketProvider, TIMEFRAMES, roundTo } from './DemoMarketProvider';
+import { Candle, orderCandles } from './MarketDataProvider';
 import { logger } from '../utils/logger';
 
-export type CandleListener = (c: Candle, event: 'update' | 'close' | 'open') => void;
+/** Platform symbol → Binance spot pair (USDT-quoted; PAXG = 1 troy oz of gold). */
+const BINANCE_PAIRS: Record<string, string> = {
+  'BTC/USD': 'BTCUSDT',
+  'ETH/USD': 'ETHUSDT',
+  'SOL/USD': 'SOLUSDT',
+  'BNB/USD': 'BNBUSDT',
+  'XRP/USD': 'XRPUSDT',
+  'LTC/USD': 'LTCUSDT',
+  'XAU/USD': 'PAXGUSDT',
+};
 
-interface AssetState {
-  symbol: string;
-  binanceSymbol?: string;
-  isForex?: boolean;
-  price: number;
-  bid: number;
-  ask: number;
-  spread: number;
-  open24h: number;
-  high24h: number;
-  low24h: number;
-  volume24h: number;
-  changePct24h: number;
-  lastUpdate: number;
-  pip: number;
-  liveCandles: Map<string, Candle>; // timeframe -> current active candle
+const BINANCE_REST = 'https://api.binance.com';
+const BINANCE_WS = 'wss://stream.binance.com:9443/stream';
+const FX_REF_URL = 'https://api.frankfurter.dev/v1/latest?base=USD';
+
+const HISTORY_BARS = 240;
+const NATIVE_INTERVALS: Record<string, string> = { '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1h', '4h': '4h', '1d': '1d' };
+const SUB_MINUTE = ['5s', '10s', '15s', '30s'];
+const FEED_STALE_MS = 15_000;      // no WS message for this long → reconnect
+const REST_FALLBACK_MS = 2_000;    // poll REST while the WS is down
+const FX_REFRESH_MS = 60 * 60_000; // reference-rate refresh
+
+type Kline = [number, string, string, string, string, string, number, ...unknown[]];
+
+async function getJson<T>(url: string, timeoutMs = 8000): Promise<T> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(t);
+  }
 }
 
-const SYMBOL_MAP: Record<string, { binance?: string; forex?: boolean; base?: number; pip: number }> = {
-  'BTC/USD': { binance: 'BTCUSDT', pip: 0.01 },
-  'ETH/USD': { binance: 'ETHUSDT', pip: 0.01 },
-  'SOL/USD': { binance: 'SOLUSDT', pip: 0.01 },
-  'BNB/USD': { binance: 'BNBUSDT', pip: 0.01 },
-  'XAU/USD': { binance: 'PAXGUSDT', pip: 0.01 }, // PAX Gold token (1:1 physical troy ounce fine gold)
-  'EUR/USD': { forex: true, base: 1.0855, pip: 0.00001 },
-  'GBP/USD': { forex: true, base: 1.2725, pip: 0.00001 },
-  'USD/JPY': { forex: true, base: 155.35, pip: 0.001 },
-  'EUR/CHF': { forex: true, base: 0.9415, pip: 0.00001 },
-};
+export class RealMarketProvider extends DemoMarketProvider {
+  override readonly name = 'real-market-feed';
+  override readonly isDemo = false;
 
-const TF_SECONDS: Record<string, number> = {
-  '5s': 5,
-  '15s': 15,
-  '30s': 30,
-  '1m': 60,
-  '5m': 300,
-  '15m': 900,
-  '30m': 1800,
-  '1h': 3600,
-  '4h': 14400,
-  '1d': 86400,
-};
-
-export class RealMarketProvider implements MarketDataProvider {
-  readonly name = 'real-market-feed';
-  readonly isDemo = false;
-
-  private states = new Map<string, AssetState>();
-  private listeners: Array<(t: Tick) => void> = [];
-  private candleListeners: CandleListener[] = [];
   private ws: WebSocket | null = null;
   private wsReconnectTimer: NodeJS.Timeout | null = null;
-  private pollTimer: NodeJS.Timeout | null = null;
-  private forexTimer: NodeJS.Timeout | null = null;
+  private watchdogTimer: NodeJS.Timeout | null = null;
+  private fxTimer: NodeJS.Timeout | null = null;
+  private lastWsMessageAt = 0;
+  private restPolling = false;
   private running = false;
+  /** latest real reference rate per OTC FX symbol */
+  private fxRef = new Map<string, number>();
 
-  constructor() {
-    this.initStates();
+  constructor(intervalMs = 200) {
+    super(intervalMs);
   }
 
-  private initStates() {
-    for (const [symbol, cfg] of Object.entries(SYMBOL_MAP)) {
-      const basePrice = cfg.base ?? (symbol === 'BTC/USD' ? 77000 : symbol === 'ETH/USD' ? 3500 : symbol === 'XAU/USD' ? 4350 : 100);
-      this.states.set(symbol, {
-        symbol,
-        binanceSymbol: cfg.binance,
-        isForex: cfg.forex,
-        price: basePrice,
-        bid: basePrice * 0.9998,
-        ask: basePrice * 1.0002,
-        spread: 0.0004,
-        open24h: basePrice,
-        high24h: basePrice * 1.01,
-        low24h: basePrice * 0.99,
-        volume24h: 100000,
-        changePct24h: 0,
-        lastUpdate: Date.now(),
-        pip: cfg.pip,
-        liveCandles: new Map(),
-      });
-    }
+  private pairOf(symbol: string): string | undefined {
+    return BINANCE_PAIRS[symbol];
   }
 
-  onTick(cb: (t: Tick) => void): void {
-    this.listeners.push(cb);
-  }
-
-  onCandle(cb: CandleListener): void {
-    this.candleListeners.push(cb);
-  }
-
-  getSymbols(): string[] {
-    return Array.from(this.states.keys());
-  }
-
-  getTimeframes(): string[] {
-    return Object.keys(TF_SECONDS);
-  }
-
-  async start(): Promise<void> {
+  override async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
-    logger.info('[RealMarketProvider] Starting real live market feeds (Binance + Live Forex)...');
+    await this.reloadAssets();
 
-    // 1. Initial snapshot of real prices via REST
-    await Promise.allSettled([this.fetchBinanceSnapshots(), this.fetchForexSnapshots()]);
+    // 1. anchor prices to the real market BEFORE any history is built
+    await Promise.allSettled([this.fetchBinancePrices(), this.fetchFxRefs()]);
 
-    // 2. Connect Binance real-time WebSocket stream
-    this.connectBinanceWs();
+    // 2. history: real klines for exchange-traded symbols, simulated OTC path for the rest
+    await Promise.allSettled([...this.states.values()].map((s) => this.seedSymbol(s)));
+    for (const s of this.states.values()) this.seedHistory(s); // anything a kline fetch could not fill
 
-    // 3. Setup fallback polling timer (every 3s)
-    this.pollTimer = setInterval(() => {
-      void this.fetchBinanceSnapshots().catch(() => undefined);
-    }, 3000);
-    this.pollTimer.unref?.();
+    // 3. live streams + candle/tick loop
+    this.connectWs();
+    this.watchdogTimer = setInterval(() => this.watchdog(), 1000);
+    this.watchdogTimer.unref?.();
+    this.fxTimer = setInterval(() => { void this.fetchFxRefs().catch(() => undefined); }, FX_REFRESH_MS);
+    this.fxTimer.unref?.();
 
-    // 4. Setup live Forex tick generator (breathes on real rates every 150ms)
-    this.forexTimer = setInterval(() => {
-      this.tickForex();
-    }, 150);
-    this.forexTimer.unref?.();
-
-    // 5. Periodic Forex base rate refresh (every 60s)
-    setInterval(() => {
-      void this.fetchForexSnapshots().catch(() => undefined);
-    }, 60000).unref?.();
+    this.lastTickAt = Date.now();
+    this.timer = setInterval(() => this.tickAll(), this.intervalMs);
+    this.timer.unref?.();
+    logger.info({ live: [...this.states.values()].filter((s) => s.live).map((s) => s.symbol) }, '[RealMarketProvider] started');
   }
 
-  async stop(): Promise<void> {
+  override async stop(): Promise<void> {
     this.running = false;
-    if (this.wsReconnectTimer) clearTimeout(this.wsReconnectTimer);
-    if (this.pollTimer) clearInterval(this.pollTimer);
-    if (this.forexTimer) clearInterval(this.forexTimer);
+    await super.stop();
+    for (const t of [this.wsReconnectTimer, this.watchdogTimer, this.fxTimer]) if (t) clearTimeout(t);
+    this.wsReconnectTimer = this.watchdogTimer = this.fxTimer = null;
     if (this.ws) {
-      try {
-        this.ws.removeAllListeners();
-        this.ws.close();
-      } catch { /* noop */ }
+      try { this.ws.removeAllListeners(); this.ws.close(); } catch { /* noop */ }
       this.ws = null;
     }
-    logger.info('[RealMarketProvider] Stopped');
   }
 
-  async getTick(symbol: string): Promise<Tick | null> {
-    const s = this.states.get(symbol);
-    if (!s) return null;
-    return this.toTick(s);
+  /** Admin reload: keep live flags + real FX anchors (DB basePrice is only a cold-start default). */
+  override async reloadAssets(): Promise<void> {
+    await super.reloadAssets();
+    for (const s of this.states.values()) {
+      const ref = this.fxRef.get(s.symbol);
+      if (ref) s.base = ref;
+      else if (s.live) s.base = s.raw;
+    }
   }
 
-  async getTicks(symbols: string[]): Promise<Tick[]> {
-    const out: Tick[] = [];
-    for (const sym of symbols) {
-      const t = await this.getTick(sym);
-      if (t) out.push(t);
+  // ───────────────────────────────────────────── history ──
+
+  private async seedSymbol(s: AssetState): Promise<void> {
+    const pair = this.pairOf(s.symbol);
+    if (!pair || !s.live) return; // OTC: simulated path seeded by seedHistory()
+    try {
+      const book = new Map<string, Candle[]>();
+      // native intervals
+      await Promise.all(Object.entries(NATIVE_INTERVALS).map(async ([tf, iv]) => {
+        const raw = await getJson<Kline[]>(`${BINANCE_REST}/api/v3/klines?symbol=${pair}&interval=${iv}&limit=${HISTORY_BARS}`);
+        book.set(tf, raw.map((k) => this.klineToCandle(s.symbol, tf, k)));
+      }));
+      // sub-minute: page through 1s klines (1000 per request) and aggregate
+      const needSec = HISTORY_BARS * Math.max(...SUB_MINUTE.map((tf) => TIMEFRAMES[tf] / 1000));
+      const ones: Kline[] = [];
+      let endTime = Date.now();
+      while (ones.length < needSec) {
+        const page = await getJson<Kline[]>(`${BINANCE_REST}/api/v3/klines?symbol=${pair}&interval=1s&limit=1000&endTime=${endTime}`);
+        if (!page.length) break;
+        ones.unshift(...page);
+        endTime = Number(page[0][0]) - 1;
+        if (page.length < 1000) break;
+      }
+      for (const tf of SUB_MINUTE) book.set(tf, this.aggregate(s.symbol, tf, ones));
+
+      for (const [tf, list] of book) s.candles.set(tf, this.fillGaps(list, tf).slice(-HISTORY_BARS));
+      // the live price wins over the kline close of the forming bar
+      this.rollCandles(s, Date.now(), true);
+      logger.info({ symbol: s.symbol }, '[RealMarketProvider] history loaded from Binance');
+    } catch (err) {
+      logger.warn({ symbol: s.symbol, err: String(err) }, '[RealMarketProvider] kline history unavailable — using simulated history');
+      s.candles = new Map();
+    }
+  }
+
+  private klineToCandle(symbol: string, timeframe: string, k: Kline): Candle {
+    const ms = TIMEFRAMES[timeframe];
+    const openTime = Number(k[0]);
+    return {
+      symbol, timeframe, openTime, closeTime: openTime + ms,
+      open: parseFloat(k[1]), high: parseFloat(k[2]), low: parseFloat(k[3]), close: parseFloat(k[4]), volume: parseFloat(k[5]),
+    };
+  }
+
+  private aggregate(symbol: string, timeframe: string, ones: Kline[]): Candle[] {
+    const ms = TIMEFRAMES[timeframe];
+    const out: Candle[] = [];
+    for (const k of ones) {
+      const bucket = Math.floor(Number(k[0]) / ms) * ms;
+      const o = parseFloat(k[1]); const h = parseFloat(k[2]); const l = parseFloat(k[3]); const c = parseFloat(k[4]); const v = parseFloat(k[5]);
+      const cur = out[out.length - 1];
+      if (!cur || cur.openTime !== bucket) {
+        out.push({ symbol, timeframe, openTime: bucket, closeTime: bucket + ms, open: o, high: h, low: l, close: c, volume: v });
+      } else {
+        if (h > cur.high) cur.high = h;
+        if (l < cur.low) cur.low = l;
+        cur.close = c;
+        cur.volume += v;
+      }
     }
     return out;
   }
 
-  /**
-   * Fetch real historical candles from Binance for crypto/metals,
-   * or synthetic continuous candles pinned to live Forex prices.
-   */
-  async getCandles(symbol: string, timeframe: string, limit = 200): Promise<Candle[]> {
-    const s = this.states.get(symbol);
-    if (!s) return [];
-
-    const tfSec = TF_SECONDS[timeframe] ?? 60;
-
-    // A. Crypto / Metal from Binance REST API
-    if (s.binanceSymbol) {
-      try {
-        const binanceInterval = this.toBinanceInterval(timeframe);
-        if (binanceInterval) {
-          // Direct interval supported by Binance (1m, 5m, 15m, 30m, 1h, 4h, 1d)
-          const url = `https://api.binance.com/api/v3/klines?symbol=${s.binanceSymbol}&interval=${binanceInterval}&limit=${Math.min(limit, 500)}`;
-          const res = await fetch(url);
-          if (res.ok) {
-            const raw = (await res.json()) as Array<[number, string, string, string, string, string, number]>;
-            const list: Candle[] = raw.map((k) => ({
-              symbol,
-              timeframe,
-              openTime: Number(k[0]),
-              open: parseFloat(k[1]),
-              high: parseFloat(k[2]),
-              low: parseFloat(k[3]),
-              close: parseFloat(k[4]),
-              volume: parseFloat(k[5]),
-              closeTime: Number(k[6]),
-            }));
-            return orderCandles(list);
-          }
-        } else {
-          // Sub-minute intervals (5s, 15s, 30s) — aggregate from Binance 1s klines
-          const need1s = Math.min(limit * tfSec, 1000);
-          const url = `https://api.binance.com/api/v3/klines?symbol=${s.binanceSymbol}&interval=1s&limit=${need1s}`;
-          const res = await fetch(url);
-          if (res.ok) {
-            const raw1s = (await res.json()) as Array<[number, string, string, string, string, string, number]>;
-            return this.aggregateCandles(raw1s, symbol, timeframe, tfSec, limit);
-          }
+  /** Binance skips 1s klines with no trades — bridge holes with flat candles so the series is continuous. */
+  private fillGaps(list: Candle[], timeframe: string): Candle[] {
+    const ms = TIMEFRAMES[timeframe];
+    const sorted = orderCandles(list);
+    const out: Candle[] = [];
+    for (const c of sorted) {
+      const prev = out[out.length - 1];
+      if (prev) {
+        let t = prev.openTime + ms;
+        let guard = 0;
+        while (t < c.openTime && guard++ < HISTORY_BARS) {
+          out.push({ symbol: c.symbol, timeframe, openTime: t, closeTime: t + ms, open: prev.close, high: prev.close, low: prev.close, close: prev.close, volume: 0 });
+          t += ms;
         }
-      } catch (err) {
-        logger.warn(`[RealMarketProvider] Error fetching Binance klines for ${symbol}: ${err}`);
       }
+      out.push(c);
     }
-
-    // B. Forex or fallback generation anchored to real current price
-    return this.generateForexHistory(s, timeframe, tfSec, limit);
+    return out;
   }
 
-  // ───────────────────────────────────────────── Binance Feed ──
+  // ───────────────────────────────────────────── live feed ──
 
-  private connectBinanceWs() {
+  private applyPrice(s: AssetState, price: number) {
+    if (!Number.isFinite(price) || price <= 0) return;
+    s.raw = price;
+    s.price = roundTo(price, s.pip);
+    if (!s.live) {
+      s.live = true;
+      logger.info({ symbol: s.symbol }, '[RealMarketProvider] live feed active');
+      // feed (re)appeared after the symbol ran on simulated history: rebuild history around
+      // the real price right away, then replace it with real klines
+      if (s.candles.size) {
+        s.base = price;
+        s.candles = new Map();
+        this.seedHistory(s);
+        void this.seedSymbol(s);
+      }
+    }
+  }
+
+  private async fetchBinancePrices(): Promise<void> {
+    const pairs = [...this.states.values()].map((s) => this.pairOf(s.symbol)).filter(Boolean) as string[];
+    if (!pairs.length) return;
+    try {
+      const rows = await getJson<Array<{ symbol: string; lastPrice: string; openPrice: string }>>(
+        `${BINANCE_REST}/api/v3/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(pairs))}`,
+      );
+      for (const r of rows) {
+        const s = [...this.states.values()].find((x) => this.pairOf(x.symbol) === r.symbol);
+        if (!s) continue;
+        this.applyPrice(s, parseFloat(r.lastPrice));
+        const o = parseFloat(r.openPrice);
+        if (o > 0) s.open24h = o;
+        s.base = s.raw;
+      }
+    } catch (err) {
+      logger.warn({ err: String(err) }, '[RealMarketProvider] Binance REST unavailable');
+    }
+  }
+
+  private connectWs() {
     if (!this.running) return;
+    const streams = [...this.states.values()]
+      .map((s) => this.pairOf(s.symbol))
+      .filter(Boolean)
+      .flatMap((p) => [`${p!.toLowerCase()}@aggTrade`, `${p!.toLowerCase()}@miniTicker`]);
+    if (!streams.length) return;
 
-    const streams = Object.values(SYMBOL_MAP)
-      .filter((m) => m.binance)
-      .map((m) => `${m.binance!.toLowerCase()}@ticker`)
-      .join('/');
-
-    const wsUrl = `wss://stream.binance.com:9443/stream?streams=${streams}`;
-
-    try {
-      this.ws = new WebSocket(wsUrl);
-
-      this.ws.on('open', () => {
-        logger.info('[RealMarketProvider] Binance WebSocket connected successfully.');
-      });
-
-      this.ws.on('message', (msg) => {
-        try {
-          const payload = JSON.parse(msg.toString()) as {
-            stream: string;
-            data: {
-              s: string; // symbol e.g. BTCUSDT
-              c: string; // close / current price
-              o: string; // open 24h
-              h: string; // high 24h
-              l: string; // low 24h
-              v: string; // volume
-              P: string; // price change percent
-              E: number; // event time
-            };
-          };
-
-          if (!payload.data) return;
-          const d = payload.data;
-          const target = Array.from(this.states.values()).find((s) => s.binanceSymbol === d.s);
-          if (!target) return;
-
-          const price = parseFloat(d.c);
-          if (!Number.isFinite(price) || price <= 0) return;
-
-          target.price = price;
-          target.open24h = parseFloat(d.o) || target.open24h;
-          target.high24h = parseFloat(d.h) || target.high24h;
-          target.low24h = parseFloat(d.l) || target.low24h;
-          target.volume24h = parseFloat(d.v) || target.volume24h;
-          target.changePct24h = parseFloat(d.P) || 0;
-          target.bid = price * (1 - target.spread / 2);
-          target.ask = price * (1 + target.spread / 2);
-          target.lastUpdate = d.E || Date.now();
-
-          const tick = this.toTick(target);
-          for (const cb of this.listeners) {
-            try { cb(tick); } catch { /* noop */ }
-          }
-
-          this.updateLiveCandles(target, price, target.lastUpdate);
-        } catch { /* noop */ }
-      });
-
-      this.ws.on('error', (err) => {
-        logger.warn(`[RealMarketProvider] Binance WS error: ${err.message}`);
-      });
-
-      this.ws.on('close', () => {
-        if (!this.running) return;
-        logger.info('[RealMarketProvider] Binance WS closed. Reconnecting in 2s...');
-        this.wsReconnectTimer = setTimeout(() => this.connectBinanceWs(), 2000);
-      });
-    } catch (e) {
-      logger.warn(`[RealMarketProvider] Failed to connect Binance WS: ${e}`);
-      this.wsReconnectTimer = setTimeout(() => this.connectBinanceWs(), 3000);
-    }
-  }
-
-  private async fetchBinanceSnapshots() {
-    for (const s of this.states.values()) {
-      if (!s.binanceSymbol) continue;
+    const ws = new WebSocket(`${BINANCE_WS}?streams=${streams.join('/')}`);
+    this.ws = ws;
+    ws.on('open', () => {
+      this.lastWsMessageAt = Date.now();
+      logger.info('[RealMarketProvider] Binance stream connected');
+    });
+    ws.on('message', (msg) => {
+      this.lastWsMessageAt = Date.now();
       try {
-        const res = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${s.binanceSymbol}`);
-        if (!res.ok) continue;
-        const d = (await res.json()) as { lastPrice: string; openPrice: string; highPrice: string; lowPrice: string; volume: string; priceChangePercent: string };
-        const price = parseFloat(d.lastPrice);
-        if (Number.isFinite(price) && price > 0) {
-          s.price = price;
-          s.open24h = parseFloat(d.openPrice) || s.open24h;
-          s.high24h = parseFloat(d.highPrice) || s.high24h;
-          s.low24h = parseFloat(d.lowPrice) || s.low24h;
-          s.volume24h = parseFloat(d.volume) || s.volume24h;
-          s.changePct24h = parseFloat(d.priceChangePercent) || 0;
-          s.bid = price * (1 - s.spread / 2);
-          s.ask = price * (1 + s.spread / 2);
-          s.lastUpdate = Date.now();
-
-          const tick = this.toTick(s);
-          for (const cb of this.listeners) {
-            try { cb(tick); } catch { /* noop */ }
-          }
-          this.updateLiveCandles(s, price, s.lastUpdate);
+        const { data: d } = JSON.parse(msg.toString()) as { data?: { e: string; s: string; p?: string; c?: string; o?: string } };
+        if (!d) return;
+        const s = [...this.states.values()].find((x) => this.pairOf(x.symbol) === d.s);
+        if (!s) return;
+        if (d.e === 'aggTrade' && d.p) this.applyPrice(s, parseFloat(d.p));
+        else if (d.e === '24hrMiniTicker' && d.o) {
+          const o = parseFloat(d.o);
+          if (o > 0) s.open24h = o;
         }
-      } catch { /* noop */ }
+      } catch { /* malformed frame */ }
+    });
+    ws.on('error', (err) => logger.warn({ err: err.message }, '[RealMarketProvider] Binance stream error'));
+    ws.on('close', () => {
+      if (this.ws === ws) this.ws = null;
+      if (!this.running) return;
+      if (this.wsReconnectTimer) clearTimeout(this.wsReconnectTimer);
+      this.wsReconnectTimer = setTimeout(() => this.connectWs(), 2000);
+    });
+  }
+
+  private watchdog() {
+    if (!this.running) return;
+    const silentFor = Date.now() - this.lastWsMessageAt;
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && silentFor > FEED_STALE_MS) {
+      logger.warn('[RealMarketProvider] Binance stream silent — reconnecting');
+      try { this.ws.terminate(); } catch { /* noop */ }
+    }
+    // while the stream is down keep prices real via REST
+    if (silentFor > REST_FALLBACK_MS && !this.restPolling) {
+      this.restPolling = true;
+      void this.fetchBinancePrices().finally(() => { this.restPolling = false; });
     }
   }
 
-  // ───────────────────────────────────────────── Forex Feed ──
+  // ───────────────────────────────────────────── OTC forex ──
 
-  private async fetchForexSnapshots() {
+  private async fetchFxRefs(): Promise<void> {
     try {
-      const res = await fetch('https://api.frankfurter.dev/v1/latest?base=USD');
-      if (!res.ok) return;
-      const data = (await res.json()) as { rates: Record<string, number> };
-      if (!data?.rates) return;
-
-      const eurRate = data.rates.EUR ? 1 / data.rates.EUR : null;
-      const gbpRate = data.rates.GBP ? 1 / data.rates.GBP : null;
-      const jpyRate = data.rates.JPY ? data.rates.JPY : null;
-      const chfRate = (data.rates.EUR && data.rates.CHF) ? (1 / data.rates.EUR) * data.rates.CHF : null;
-
-      if (eurRate) this.updateForexBase('EUR/USD', eurRate);
-      if (gbpRate) this.updateForexBase('GBP/USD', gbpRate);
-      if (jpyRate) this.updateForexBase('USD/JPY', jpyRate);
-      if (chfRate) this.updateForexBase('EUR/CHF', chfRate);
-    } catch { /* noop */ }
-  }
-
-  private updateForexBase(symbol: string, realRate: number) {
-    const s = this.states.get(symbol);
-    if (!s) return;
-    s.price = realRate;
-    s.bid = realRate * 0.9998;
-    s.ask = realRate * 1.0002;
-    s.lastUpdate = Date.now();
-  }
-
-  private tickForex() {
-    const now = Date.now();
-    for (const s of this.states.values()) {
-      if (!s.isForex) continue;
-      // Micro-jitter: 0.1 pip organic tick movement
-      const jitter = (Math.random() - 0.5) * s.pip * 0.8;
-      const newPrice = Number((s.price + jitter).toFixed(s.symbol === 'USD/JPY' ? 3 : 5));
-      s.price = newPrice;
-      s.bid = newPrice - s.pip;
-      s.ask = newPrice + s.pip;
-      s.lastUpdate = now;
-
-      const tick = this.toTick(s);
-      for (const cb of this.listeners) {
-        try { cb(tick); } catch { /* noop */ }
-      }
-      this.updateLiveCandles(s, newPrice, now);
-    }
-  }
-
-  // ───────────────────────────────────────────── Candle Engine ──
-
-  private updateLiveCandles(s: AssetState, price: number, now: number) {
-    for (const [tf, sec] of Object.entries(TF_SECONDS)) {
-      const bucketMs = sec * 1000;
-      const bucketTime = Math.floor(now / bucketMs) * bucketMs;
-      let cur = s.liveCandles.get(tf);
-
-      if (!cur || cur.openTime < bucketTime) {
-        if (cur) {
-          cur.close = price;
-          cur.closeTime = bucketTime - 1;
-          for (const cb of this.candleListeners) {
-            try { cb(cur, 'close'); } catch { /* noop */ }
-          }
-        }
-        cur = {
-          symbol: s.symbol,
-          timeframe: tf,
-          openTime: bucketTime,
-          open: price,
-          high: price,
-          low: price,
-          close: price,
-          volume: 1,
-          closeTime: bucketTime + bucketMs - 1,
-        };
-        s.liveCandles.set(tf, cur);
-        for (const cb of this.candleListeners) {
-          try { cb(cur, 'open'); } catch { /* noop */ }
-        }
-      } else {
-        cur.high = Math.max(cur.high, price);
-        cur.low = Math.min(cur.low, price);
-        cur.close = price;
-        cur.volume += 0.1;
-        for (const cb of this.candleListeners) {
-          try { cb(cur, 'update'); } catch { /* noop */ }
+      const data = await getJson<{ rates: Record<string, number> }>(FX_REF_URL);
+      const r = data?.rates ?? {};
+      const usdPer = (ccy: string) => (r[ccy] ? 1 / r[ccy] : null); // USD base → XXX/USD
+      const refs: Record<string, number | null> = {
+        'EUR/USD': usdPer('EUR'),
+        'GBP/USD': usdPer('GBP'),
+        'AUD/USD': usdPer('AUD'),
+        'NZD/USD': usdPer('NZD'),
+        'USD/JPY': r.JPY ?? null,
+        'USD/CHF': r.CHF ?? null,
+        'USD/CAD': r.CAD ?? null,
+        'EUR/CHF': r.EUR && r.CHF ? r.CHF / r.EUR : null,
+        'EUR/GBP': r.EUR && r.GBP ? r.GBP / r.EUR : null,
+      };
+      for (const [symbol, ref] of Object.entries(refs)) {
+        if (!ref || !Number.isFinite(ref)) continue;
+        this.fxRef.set(symbol, ref);
+        const s = this.states.get(symbol);
+        if (!s || s.live) continue;
+        const first = !s.candles.size;
+        s.base = ref; // mean reversion pulls the OTC tape toward the real rate — no visible jump
+        if (first) {
+          s.raw = ref;
+          s.price = roundTo(ref, s.pip);
+          s.open24h = s.price;
         }
       }
+    } catch (err) {
+      logger.warn({ err: String(err) }, '[RealMarketProvider] FX reference rates unavailable — using asset base prices');
     }
-  }
-
-  private aggregateCandles(raw1s: Array<[number, string, string, string, string, string, number]>, symbol: string, timeframe: string, tfSec: number, limit: number): Candle[] {
-    const bucketMs = tfSec * 1000;
-    const groups = new Map<number, Candle>();
-
-    for (const k of raw1s) {
-      const t = Number(k[0]);
-      const bucket = Math.floor(t / bucketMs) * bucketMs;
-      const open = parseFloat(k[1]);
-      const high = parseFloat(k[2]);
-      const low = parseFloat(k[3]);
-      const close = parseFloat(k[4]);
-      const vol = parseFloat(k[5]);
-
-      const existing = groups.get(bucket);
-      if (!existing) {
-        groups.set(bucket, {
-          symbol,
-          timeframe,
-          openTime: bucket,
-          open,
-          high,
-          low,
-          close,
-          volume: vol,
-          closeTime: bucket + bucketMs - 1,
-        });
-      } else {
-        existing.high = Math.max(existing.high, high);
-        existing.low = Math.min(existing.low, low);
-        existing.close = close;
-        existing.volume += vol;
-      }
-    }
-
-    return orderCandles(Array.from(groups.values())).slice(-limit);
-  }
-
-  private generateForexHistory(s: AssetState, timeframe: string, tfSec: number, limit: number): Candle[] {
-    const bucketMs = tfSec * 1000;
-    const now = Date.now();
-    const curBucket = Math.floor(now / bucketMs) * bucketMs;
-    const candles: Candle[] = [];
-
-    let p = s.price;
-    for (let i = limit - 1; i >= 0; i--) {
-      const openTime = curBucket - i * bucketMs;
-      const swing = (Math.sin(openTime * 0.00001) + Math.cos(openTime * 0.00003)) * (s.pip * 5);
-      const noise = (Math.random() - 0.5) * s.pip * 2;
-      const barClose = Number((p + swing + noise).toFixed(s.symbol === 'USD/JPY' ? 3 : 5));
-      const barOpen = Number((barClose - (Math.random() - 0.5) * s.pip * 3).toFixed(s.symbol === 'USD/JPY' ? 3 : 5));
-      const barHigh = Math.max(barOpen, barClose) + Math.random() * s.pip;
-      const barLow = Math.min(barOpen, barClose) - Math.random() * s.pip;
-
-      candles.push({
-        symbol: s.symbol,
-        timeframe,
-        openTime,
-        open: barOpen,
-        high: Number(barHigh.toFixed(s.symbol === 'USD/JPY' ? 3 : 5)),
-        low: Number(barLow.toFixed(s.symbol === 'USD/JPY' ? 3 : 5)),
-        close: barClose,
-        volume: Math.floor(Math.random() * 50) + 10,
-        closeTime: openTime + bucketMs - 1,
-      });
-    }
-
-    // Anchor the last candle to the exact current live price
-    if (candles.length) {
-      const last = candles[candles.length - 1];
-      last.close = s.price;
-      last.high = Math.max(last.high, s.price);
-      last.low = Math.min(last.low, s.price);
-    }
-
-    return orderCandles(candles);
-  }
-
-  private toBinanceInterval(tf: string): string | null {
-    switch (tf) {
-      case '1m': return '1m';
-      case '5m': return '5m';
-      case '15m': return '15m';
-      case '30m': return '30m';
-      case '1h': return '1h';
-      case '4h': return '4h';
-      case '1d': return '1d';
-      default: return null;
-    }
-  }
-
-  private toTick(s: AssetState): Tick {
-    return {
-      symbol: s.symbol,
-      bid: s.bid,
-      ask: s.ask,
-      mid: s.price,
-      spread: s.spread,
-      changePct24h: s.changePct24h,
-      ts: s.lastUpdate,
-      demo: false,
-    };
   }
 }

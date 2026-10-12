@@ -23,7 +23,7 @@ export const env = {
   MARKET_PROVIDER: process.env.MARKET_PROVIDER ?? 'real',
   PAYMENT_PROVIDER: process.env.PAYMENT_PROVIDER ?? 'demo',
   DEMO_STARTING_BALANCE: parseInt(process.env.DEMO_STARTING_BALANCE ?? '10000', 10),
-  DEMO_TICK_INTERVAL_MS: parseInt(process.env.DEMO_TICK_INTERVAL_MS ?? '40', 10),
+  DEMO_TICK_INTERVAL_MS: parseInt(process.env.DEMO_TICK_INTERVAL_MS ?? '200', 10),
   isProd: (process.env.NODE_ENV ?? 'development') === 'production',
 };
 

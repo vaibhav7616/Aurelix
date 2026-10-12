@@ -22,7 +22,7 @@ import { Candle, MarketDataProvider, Tick, orderCandles } from './MarketDataProv
 import { prisma } from '../config/database';
 import { cacheGet, cacheSet } from '../config/redis';
 
-interface AssetState {
+export interface AssetState {
   symbol: string;
   price: number;         // current mid (already rounded to pip)
   raw: number;           // un-rounded internal price (drives the walk)
@@ -36,6 +36,10 @@ interface AssetState {
   vol: number;           // current instantaneous volatility multiplier (clustering)
   momentum: number;      // short-lived directional bias
   candles: Map<string, Candle[]>; // timeframe -> candles
+  /** price driven by an external live feed (no random walk); false = simulated/OTC */
+  live: boolean;
+  /** recent (ts, mid) quotes — settlement reads the exact price at expiry from here */
+  history: Array<[number, number]>;
 }
 
 export const TIMEFRAMES: Record<string, number> = {
@@ -55,7 +59,7 @@ export function pipFor(symbol: string, price: number): number {
   if (price >= 10) return 0.001;
   return 0.00001;
 }
-function roundTo(v: number, step: number): number {
+export function roundTo(v: number, step: number): number {
   const d = Math.max(0, Math.round(-Math.log10(step)));
   return Number((Math.round(v / step) * step).toFixed(d));
 }
@@ -71,20 +75,21 @@ const KAPPA_PER_SEC = 0.000008;
 const HISTORY_BARS = 240;           // bars seeded per timeframe on boot
 const MAX_BARS = 1500;              // kept in memory per timeframe
 const CANDLE_CACHE_TTL = 60 * 60 * 6;
+const PRICE_HISTORY_MS = 15 * 60_000;  // quote history kept for settlement lookups
 
 export type CandleListener = (c: Candle, event: 'update' | 'close' | 'open') => void;
 
 export class DemoMarketProvider implements MarketDataProvider {
-  readonly name = 'demo';
-  readonly isDemo = true;
-  private states = new Map<string, AssetState>();
-  private timer: NodeJS.Timeout | null = null;
-  private listeners: Array<(t: Tick) => void> = [];
-  private candleListeners: CandleListener[] = [];
-  private intervalMs: number;
-  private lastTickAt = 0;
+  readonly name: string = 'demo';
+  readonly isDemo: boolean = true;
+  protected states = new Map<string, AssetState>();
+  protected timer: NodeJS.Timeout | null = null;
+  protected listeners: Array<(t: Tick) => void> = [];
+  protected candleListeners: CandleListener[] = [];
+  protected intervalMs: number;
+  protected lastTickAt = 0;
 
-  constructor(intervalMs = 40) {
+  constructor(intervalMs = 200) {
     this.intervalMs = Math.max(20, intervalMs);
   }
 
@@ -130,6 +135,8 @@ export class DemoMarketProvider implements MarketDataProvider {
           vol: prev?.vol ?? 1,
           momentum: prev?.momentum ?? 0,
           candles: prev?.candles ?? new Map(),
+          live: prev?.live ?? false,
+          history: prev?.history ?? [],
         });
       }
     } catch {
@@ -146,7 +153,7 @@ export class DemoMarketProvider implements MarketDataProvider {
         ];
         for (const [symbol, price, vol] of defaults) {
           const pip = pipFor(symbol, price);
-          this.states.set(symbol, { symbol, price: roundTo(price, pip), raw: price, base: price, open24h: price, volatility: vol, spread: 0.0004, enabled: true, pip, vol: 1, momentum: 0, candles: new Map() });
+          this.states.set(symbol, { symbol, price: roundTo(price, pip), raw: price, base: price, open24h: price, volatility: vol, spread: 0.0004, enabled: true, pip, vol: 1, momentum: 0, candles: new Map(), live: false, history: [] });
         }
       }
     }
@@ -215,7 +222,7 @@ export class DemoMarketProvider implements MarketDataProvider {
    * (1 s) steps for the most recent stretch, coarser steps further back — so a
    * 1d chart with 240 bars costs ~thousands of points instead of ~20 million.
    */
-  private seedHistory(s: AssetState) {
+  protected seedHistory(s: AssetState) {
     const missing = Object.keys(TIMEFRAMES).filter((tf) => !(s.candles.get(tf)?.length));
     if (!missing.length) return;
 
@@ -296,7 +303,7 @@ export class DemoMarketProvider implements MarketDataProvider {
     this.rollCandles(s, now, true);
   }
 
-  private closeAt(s: AssetState, ts: number): number | null {
+  protected closeAt(s: AssetState, ts: number): number | null {
     const arr = s.candles.get('5m') ?? s.candles.get('1m') ?? [];
     let best: Candle | null = null;
     for (const c of arr) { if (c.openTime <= ts) best = c; else break; }
@@ -305,7 +312,7 @@ export class DemoMarketProvider implements MarketDataProvider {
 
   // ───────────────────────────────────────────── live dynamics ──
 
-  private tickAll() {
+  protected tickAll() {
     const now = Date.now();
     const dt = Math.min(5, Math.max(0.02, (now - this.lastTickAt) / 1000)); // seconds since last step
     this.lastTickAt = now;
@@ -315,60 +322,59 @@ export class DemoMarketProvider implements MarketDataProvider {
         this.rollCandles(s, now);
         continue;
       }
-      this.step(s, dt);
+      if (!s.live) this.step(s, dt); // live-fed symbols are moved by the feed, never by the walk
       this.rollCandles(s, now);
-      this.emit(s);
+      this.emit(s, now);
     }
   }
 
-  /** One stochastic step with Quotex-like micro-pip realism. */
-  private step(s: AssetState, dt: number) {
-    // Evolve momentum smoothly (mean-reverting OU process for gentle swings)
-    s.momentum = s.momentum * Math.pow(0.85, dt) + (Math.random() - 0.5) * 0.4 * Math.sqrt(dt);
-    s.momentum = clamp(s.momentum, -1.2, 1.2);
+  /**
+   * One stochastic step of `dt` seconds. Uses the SAME dynamics as `seedHistory`
+   * (volatility clustering + momentum + slow mean reversion, sigma ∝ √dt), so live
+   * candles have the same size as the history candles and the pace does not depend
+   * on the tick interval.
+   */
+  protected step(s: AssetState, dt: number) {
+    const sigma = s.volatility * SIGMA_PER_SEC * Math.sqrt(dt);
+    s.vol = clamp(s.vol + (Math.random() - 0.5) * 0.25 * Math.sqrt(dt) + (1 - s.vol) * 0.05 * dt, 0.4, 3.2);
+    s.momentum = clamp(s.momentum * Math.pow(0.96, dt) + (Math.random() - 0.5) * 0.35 * Math.sqrt(dt), -1.5, 1.5);
+    const revert = ((s.base - s.raw) / s.base) * Math.min(0.5, KAPPA_PER_SEC * dt);
+    const shock = gauss() * sigma * s.vol + s.momentum * sigma * 0.6 + revert;
+    s.raw = clamp(s.raw * Math.exp(shock), s.base * 0.6, s.base * 1.6);
+    s.price = roundTo(s.raw, s.pip);
+  }
 
-    // Mean-reversion pull towards base price if price drifts too far (>1.5%)
-    const pctDiff = (s.raw - s.base) / s.base;
-    const meanPull = -pctDiff * 0.02 * dt;
-
-    // Determine unit step size in terms of fractional pips (sub-pip precision for ultra-fluid movement)
-    let unitStep = s.pip * 0.2;
-    if (/BTC/.test(s.symbol)) {
-      unitStep = 0.05; // $0.05 micro-steps
-    } else if (/ETH/.test(s.symbol)) {
-      unitStep = 0.01; // $0.01 micro-steps
-    } else if (/XAU/.test(s.symbol)) {
-      unitStep = 0.01; // $0.01 micro-steps
-    } else if (/JPY/.test(s.symbol)) {
-      unitStep = 0.0002; // 0.2 JPY pip
-    } else {
-      unitStep = 0.000002; // 0.2 FX pip (sub-pipette precision)
+  /** Record a quote for settlement lookups (bounded to the last PRICE_HISTORY_MS). */
+  protected recordPrice(s: AssetState, ts: number) {
+    const h = s.history;
+    const last = h[h.length - 1];
+    if (last && ts <= last[0]) last[1] = s.price;
+    else h.push([ts, s.price]);
+    const cutoff = ts - PRICE_HISTORY_MS;
+    if (h.length > 64 && h[0][0] < cutoff) {
+      let i = 0;
+      while (i < h.length && h[i][0] < cutoff) i++;
+      h.splice(0, i);
     }
+  }
 
-    // Organic continuous Brownian walk with gentle momentum
-    const r = Math.random();
-    let pips = 0;
-    if (r > 0.15) {
-      // Direction bias from momentum + mean reversion
-      const upProb = clamp(0.5 + s.momentum * 0.25 + meanPull * 10, 0.15, 0.85);
-      const dir = Math.random() < upProb ? 1 : -1;
-
-      if (r < 0.70) {
-        pips = dir * 1;
-      } else if (r < 0.92) {
-        pips = dir * 2;
-      } else {
-        pips = dir * 3;
-      }
+  /**
+   * The quote that was live at instant `ts` (last quote at or before `ts`).
+   * Fixed-time trades settle on this, so a settlement that runs a few ms late
+   * still uses the exact expiry price. Null when `ts` is outside the recorded
+   * window or the asset is unknown/halted.
+   */
+  priceAt(symbol: string, ts: number): number | null {
+    const s = this.states.get(symbol);
+    if (!s || !s.enabled) return null;
+    const h = s.history;
+    if (!h.length || ts < h[0][0]) return null;
+    let lo = 0; let hi = h.length - 1; // last index with time <= ts
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (h[mid][0] <= ts) lo = mid; else hi = mid - 1;
     }
-
-    if (pips !== 0) {
-      s.raw = s.raw + pips * unitStep;
-      // Soft boundary clamp around base price (within ±5% for FX, ±15% for crypto)
-      const maxBand = /BTC|ETH/.test(s.symbol) ? 0.20 : 0.05;
-      s.raw = clamp(s.raw, s.base * (1 - maxBand), s.base * (1 + maxBand));
-      s.price = roundTo(s.raw, s.pip * 0.1);
-    }
+    return h[lo][1];
   }
 
   /**
@@ -378,7 +384,7 @@ export class DemoMarketProvider implements MarketDataProvider {
    * Handles long gaps (process paused) by inserting flat bridging candles so there
    * are never holes in the series.
    */
-  private rollCandles(s: AssetState, now: number, silent = false) {
+  protected rollCandles(s: AssetState, now: number, silent = false) {
     for (const [tf, ms] of Object.entries(TIMEFRAMES)) {
       const arr = s.candles.get(tf) ?? [];
       const bucket = Math.floor(now / ms) * ms;
@@ -439,7 +445,7 @@ export class DemoMarketProvider implements MarketDataProvider {
     } catch { /* best effort */ }
   }
 
-  private toTick(s: AssetState): Tick {
+  protected toTick(s: AssetState, ts = Date.now()): Tick {
     const half = (s.spread * s.price) / 2;
     const mid = s.price;
     return {
@@ -449,18 +455,19 @@ export class DemoMarketProvider implements MarketDataProvider {
       mid,
       spread: s.spread,
       changePct24h: s.open24h ? ((mid - s.open24h) / s.open24h) * 100 : 0,
-      ts: Date.now(),
-      demo: true,
+      ts,
+      demo: !s.live,
     };
   }
 
-  private emit(s: AssetState) {
-    const t = this.toTick(s);
+  protected emit(s: AssetState, now = Date.now()) {
+    this.recordPrice(s, now);
+    const t = this.toTick(s, now);
     for (const l of this.listeners) {
       try { l(t); } catch { /* ignore */ }
     }
   }
-  private emitCandle(c: Candle, event: 'update' | 'close' | 'open') {
+  protected emitCandle(c: Candle, event: 'update' | 'close' | 'open') {
     if (event === 'update') return; // per-tick OHLC is derived client-side from ticks; only lifecycle events go out
     for (const l of this.candleListeners) {
       try { l({ ...c }, event); } catch { /* ignore */ }

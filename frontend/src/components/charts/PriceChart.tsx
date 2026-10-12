@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createChart, ColorType, CrosshairMode, LineStyle,
   type IChartApi, type ISeriesApi, type Time, type MouseEventParams,
   type BarPrice, type DeepPartial, type PriceFormatCustom,
 } from 'lightweight-charts';
 import { get } from '../../lib/api';
-import { useTerminal, type Tick } from '../../stores/terminalStore';
+import { useTerminal, serverNow, type Tick, type LiveCandle } from '../../stores/terminalStore';
 import { fmtPrice } from '../../lib/format';
 import { normalizeCandles } from '../../lib/candles';
 import { fmtHMS, secondsLeft, previewOutcome, type OptionTrade } from '../../lib/options';
@@ -183,6 +183,7 @@ export function PriceChart() {
   const pricePillTextRef = useRef<HTMLSpanElement>(null);
   const openPriceTextRef = useRef<HTMLSpanElement>(null);
 
+  const queryClient = useQueryClient();
   const [candleSecondsLeft, setCandleSecondsLeft] = useState<number>(60);
   const [utcClock, setUtcClock] = useState<string>('');
 
@@ -306,7 +307,7 @@ export function PriceChart() {
     chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.08, bottom: hasOsc ? 0.32 : inds.vol ? 0.14 : 0.08 } });
 
     // Quotex-style sub-pip resolution with strictly bounded minMove
-    const pip = /JPY/.test(symbol) ? 0.001 : /BTC|ETH/.test(symbol) ? 0.01 : 0.00001;
+    const pip = /JPY/.test(symbol) ? 0.001 : /BTC|ETH|XAU/.test(symbol) ? 0.01 : 0.00001;
     const priceFormatCustom: DeepPartial<PriceFormatCustom> = {
       type: 'custom',
       minMove: pip,
@@ -464,11 +465,62 @@ export function PriceChart() {
     };
   }, [symbol]);
 
+  // Server candle lifecycle: the server is authoritative for every finished candle and for the
+  // open of the new one, so the chart always matches the price series trades settle on.
+  useEffect(() => {
+    const key = `${symbol}|${timeframe}`;
+    let lastSeen: LiveCandle | undefined = useTerminal.getState().candleEvents[key];
+    const unsub = useTerminal.subscribe((state) => {
+      const ev = state.candleEvents[key];
+      if (!ev || ev === lastSeen) return;
+      lastSeen = ev;
+      const list = liveCandlesRef.current;
+      const main = mainRef.current;
+      if (!list.length || !main) return;
+      const idx = list.findIndex((c) => c.openTime === ev.openTime);
+      const isLast = idx === list.length - 1;
+      if (ev.event === 'close') {
+        if (idx < 0) return;
+        const c = list[idx];
+        c.open = ev.open; c.high = ev.high; c.low = ev.low; c.close = ev.close;
+      } else {
+        if (idx < 0) return; // client has not rolled into this bucket yet — the roll uses the previous close
+        const c = list[idx];
+        c.open = ev.open;
+        c.high = Math.max(c.high, ev.open);
+        c.low = Math.min(c.low, ev.open);
+      }
+      try {
+        const asBar = (c: Candle) => (chartType === 'candles'
+          ? { time: (c.openTime / 1000) as Time, open: c.open, high: c.high, low: c.low, close: c.close }
+          : { time: (c.openTime / 1000) as Time, value: c.close });
+        if (isLast) (main as unknown as ISeriesApi<'Candlestick'>).update(asBar(list[idx]) as never);
+        else (main as unknown as ISeriesApi<'Candlestick'>).setData(list.map(asBar) as never);
+      } catch { /* series being rebuilt */ }
+    });
+    return () => unsub();
+  }, [symbol, timeframe, chartType]);
+
+  // History refresh after the tab slept / the socket dropped: rebuild from the server instead of
+  // bridging the gap with flat client-side candles.
+  useEffect(() => {
+    let hiddenAt = 0;
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+      if (hiddenAt && Date.now() - hiddenAt > Math.max(2 * tfToMs(timeframe), 10_000)) {
+        void queryClient.invalidateQueries({ queryKey: ['candles', symbol, timeframe] });
+      }
+      hiddenAt = 0;
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [symbol, timeframe, queryClient]);
+
   // High-performance 120Hz+ live loop with unconditionally stable exponential easing & micro-breathing
   useEffect(() => {
     let lastPerfTime = performance.now();
     let lastTimeUpdate = 0;
-    const pip = /JPY/.test(symbol) ? 0.001 : /BTC|ETH/.test(symbol) ? 0.01 : 0.00001;
+    const pip = /JPY/.test(symbol) ? 0.001 : /BTC|ETH|XAU/.test(symbol) ? 0.01 : 0.00001;
 
     const animate = (timestamp: number) => {
       animFrameRef.current = requestAnimationFrame(animate);
@@ -477,7 +529,8 @@ export function PriceChart() {
       const dt = Math.min(0.08, Math.max(0.001, (timestamp - lastPerfTime) / 1000));
       lastPerfTime = timestamp;
 
-      const now = Date.now();
+      // candle buckets follow the SERVER clock (the same clock that rolls candles and settles trades)
+      const now = serverNow();
       const list = liveCandlesRef.current;
       const chart = chartRef.current;
       const main = mainRef.current;
@@ -515,10 +568,8 @@ export function PriceChart() {
       currentPriceRef.current = currentPrice;
       velocityRef.current = 0;
 
-      // Quotex micro-breathing: subtle sub-pip organic oscillation so the candle head breathes realistically like an electronic matching engine
-      const microTime = timestamp * 0.006;
-      const microJitter = (Math.sin(microTime) * 0.6 + Math.sin(microTime * 2.3) * 0.4) * (pip * 0.08);
-      let curPrice = Number((currentPrice + microJitter).toFixed(/JPY/.test(symbol) ? 3 : /BTC|ETH/.test(symbol) ? 2 : 5));
+      // Only real quotes are drawn — no synthetic jitter: the candle must show exactly the prices the server settles on
+      let curPrice = Number(currentPrice.toFixed(/JPY/.test(symbol) ? 3 : /BTC|ETH|XAU/.test(symbol) ? 2 : 5));
 
       // Hard sanity guard against numerical explosion or NaN
       if (!Number.isFinite(curPrice) || curPrice <= 0 || (lastCandle.close > 0 && Math.abs(curPrice - lastCandle.close) > lastCandle.close * 0.15)) {
@@ -611,9 +662,9 @@ export function PriceChart() {
           openPriceTextRef.current.textContent = fmtPrice(newCandle.open);
         }
       } else {
-        // Active candle breathing: expand high/low wicks and update close smoothly
-        lastCandle.high = Math.max(lastCandle.high, curPrice);
-        lastCandle.low = Math.min(lastCandle.low, curPrice);
+        // Active candle: wicks from the real quote, close eases toward it
+        lastCandle.high = Math.max(lastCandle.high, curPrice, targetPrice);
+        lastCandle.low = Math.min(lastCandle.low, curPrice, targetPrice);
         lastCandle.close = curPrice;
         lastCandle.volume += 0.02;
         activeCandleRef.current = lastCandle;
@@ -858,7 +909,7 @@ export function PriceChart() {
     const list = liveCandlesRef.current;
     if (!list.length) return null;
 
-    const nowSec = Math.floor(Date.now() / 1000);
+    const nowSec = Math.floor(serverNow() / 1000);
     const durSec = Number(localStorage.getItem('ax_opt_dur') ?? 60);
     const endSec = nowSec + durSec;
 

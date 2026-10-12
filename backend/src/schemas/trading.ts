@@ -13,7 +13,19 @@ export const openOptionSchema = z.object({
   symbol: z.string().min(1).max(20),
   direction: z.enum(['UP', 'DOWN']),
   stake: z.number().positive().max(10_000_000),
+  /** "Timer" mode */
+  durationSec: z.number().int().min(5).max(4 * 3600).optional(),
+  /** "Time" mode: expiry instant, epoch ms (whole minute) */
+  expiresAt: z.number().int().positive().optional(),
+}).refine((d) => (d.durationSec == null) !== (d.expiresAt == null), { message: 'Send either durationSec (Timer) or expiresAt (Time)' });
+
+export const pendingOptionSchema = z.object({
+  accountId: z.string().min(1),
+  symbol: z.string().min(1).max(20),
+  direction: z.enum(['UP', 'DOWN']),
+  stake: z.number().positive().max(10_000_000),
   durationSec: z.number().int().min(5).max(4 * 3600),
+  targetPrice: z.number().positive(),
 });
 export const closePositionSchema = z.object({ positionId: z.string().min(1) });
 export const updateSLTPSchema = z.object({

@@ -25,6 +25,8 @@ export interface MarketDataProvider {
   getTicks(symbols: string[]): Promise<Tick[]>;
   getCandles(symbol: string, timeframe: string, limit?: number): Promise<Candle[]>;
   onTick(cb: (tick: Tick) => void): void;
+  /** Quote that was live at instant `ts` (for exact expiry settlement), null if unknown. */
+  priceAt?(symbol: string, ts: number): number | null;
 }
 
 /** Guarantee strictly time-ascending, deduped candles (chart libs hard-require this).

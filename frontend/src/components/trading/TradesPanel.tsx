@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { get } from '../../lib/api';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { get, del, apiError } from '../../lib/api';
+import { useUI } from '../../stores/uiStore';
 import { useTerminal } from '../../stores/terminalStore';
 import { fmtMoney, fmtPrice, fmtTime } from '../../lib/format';
-import { fmtHMS, fmtDur, secondsLeft, previewOutcome, type OptionTrade } from '../../lib/options';
+import { fmtHMS, fmtDur, secondsLeft, previewOutcome, type OptionTrade, type PendingTrade } from '../../lib/options';
 import { Empty, TableSkeleton } from '../ui/primitives';
 import { clsx } from 'clsx';
 
@@ -78,6 +79,47 @@ export function OpenTradesList({ accountId }: { accountId?: string | null }) {
                 {pv === 'WON' ? `+${fmtMoney(t.stake * t.payoutPct / 100)}` : pv === 'LOST' ? `−${fmtMoney(t.stake)}` : fmtMoney(0)}
               </div>
               <div className="ax-num text-[10px] text-mute mt-0.5">{fmtHMS(left)}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Active pending trades (execution by price) with cancel — shown above the running trades. */
+export function PendingTradesList({ accountId }: { accountId?: string | null }) {
+  const { ticks } = useTerminal();
+  const qc = useQueryClient();
+  const push = useUI((s) => s.push);
+  const { data } = useQuery({
+    queryKey: ['pending', accountId],
+    queryFn: () => get<PendingTrade[]>('/api/v1/options/pending', accountId ? { accountId } : {}),
+    refetchInterval: 5000,
+  });
+  const cancel = useMutation({
+    mutationFn: (id: string) => del<PendingTrade>(`/api/v1/options/pending/${id}`),
+    onSuccess: () => { ['pending', 'accounts'].forEach((k) => qc.invalidateQueries({ queryKey: [k] })); push('info', 'Pending trade cancelled — stake released'); },
+    onError: (e) => push('err', apiError(e)),
+  });
+  if (!data?.length) return null;
+  return (
+    <div className="divide-y divide-white/[0.06] border-b border-line mb-1">
+      {data.map((p) => {
+        const mark = ticks[p.symbol]?.mid;
+        return (
+          <div key={p.id} className="px-3 py-2 flex items-center gap-2.5">
+            <div className="w-6 h-6 shrink-0 rounded-full bg-warn/15 text-warn flex items-center justify-center text-[11px]">⏱</div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-bold">{p.symbol}</span>
+                <DirBadge d={p.direction} />
+              </div>
+              <div className="text-[10px] text-mute ax-num mt-0.5">{p.triggerAbove ? '≥' : '≤'} {fmtPrice(p.targetPrice)} · now {mark ? fmtPrice(mark) : '…'} · {fmtDur(p.durationSec)}</div>
+            </div>
+            <div className="text-right">
+              <div className="ax-num text-xs font-bold">{fmtMoney(p.stake)}</div>
+              <button onClick={() => cancel.mutate(p.id)} disabled={cancel.isPending} className="text-[10px] text-[#ff5447] hover:underline font-semibold mt-0.5">Cancel</button>
             </div>
           </div>
         );

@@ -107,6 +107,11 @@ export async function put<T>(url: string, body?: unknown): Promise<T> {
   if (!data.success) throw new Error(data.error?.message ?? 'Request failed');
   return data.data;
 }
+export async function del<T>(url: string): Promise<T> {
+  const { data } = await api.delete<Envelope<T>>(url);
+  if (!data.success) throw new Error(data.error?.message ?? 'Request failed');
+  return data.data;
+}
 export function apiError(e: unknown): string {
   if (axios.isAxiosError(e)) {
     const d = e.response?.data as Envelope<null> | undefined;

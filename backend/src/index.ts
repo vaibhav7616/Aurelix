@@ -5,6 +5,7 @@ import { logger } from './utils/logger';
 import { initSocket } from './websocket/socketServer';
 import { startMarket, stopMarket } from './services/marketService';
 import { startSettlementLoop, stopSettlementLoop } from './trading/optionsEngine';
+import { startPendingEngine, stopPendingEngine } from './trading/pendingEngine';
 
 async function main(): Promise<void> {
   const app = createApp();
@@ -15,6 +16,7 @@ async function main(): Promise<void> {
     logger.info('demo market engine started');
     startSettlementLoop();
     logger.info('option settlement loop started');
+    await startPendingEngine();
   } catch (e) {
     logger.warn({ e }, 'market engine failed to start (non-fatal)');
   }
@@ -25,6 +27,7 @@ async function main(): Promise<void> {
   const shutdown = async () => {
     logger.info('shutting down...');
     stopSettlementLoop();
+    stopPendingEngine();
     await stopMarket().catch(() => undefined);
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 5000).unref();

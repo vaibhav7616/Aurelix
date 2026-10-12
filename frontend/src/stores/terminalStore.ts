@@ -20,6 +20,10 @@ interface TerminalState {
   accountId: string | null;
   ticks: Record<string, Tick>;
   favorites: string[];
+  /** asset tabs across the top of the terminal (Quotex style) */
+  openTabs: string[];
+  /** "pending trade" (open at a target price) toggle in the ticket */
+  pendingTrade: boolean;
   setSymbol: (s: string) => void;
   setTimeframe: (t: string) => void;
   setChartType: (t: 'candles' | 'line' | 'area') => void;
@@ -28,6 +32,9 @@ interface TerminalState {
   applyCandleEvent: (c: LiveCandle) => void;
   setClockOffset: (ms: number) => void;
   toggleFavorite: (s: string) => void;
+  addTab: (s: string) => void;
+  closeTab: (s: string) => void;
+  setPendingTrade: (v: boolean) => void;
 }
 
 /** Current time on the server clock (best effort). */
@@ -36,7 +43,7 @@ export function serverNow(): number {
 }
 
 export const useTerminal = create<TerminalState>((set) => ({
-  symbol: 'BTC/USD',
+  symbol: localStorage.getItem('ax_active_sym') ?? 'BTC/USD',
   timeframe: localStorage.getItem('ax_tf') || '1m',
   clockOffset: 0,
   candleEvents: {},
@@ -47,7 +54,16 @@ export const useTerminal = create<TerminalState>((set) => ({
   accountId: localStorage.getItem('ax_account'),
   ticks: {},
   favorites: JSON.parse(localStorage.getItem('ax_favs') ?? '["BTC/USD","ETH/USD"]'),
-  setSymbol: (symbol) => set({ symbol }),
+  openTabs: JSON.parse(localStorage.getItem('ax_tabs') ?? '["BTC/USD","ETH/USD","EUR/USD"]'),
+  pendingTrade: false,
+  setSymbol: (symbol) => {
+    localStorage.setItem('ax_active_sym', symbol);
+    set((state) => {
+      const tabs = state.openTabs.includes(symbol) ? state.openTabs : [...state.openTabs, symbol];
+      localStorage.setItem('ax_tabs', JSON.stringify(tabs));
+      return { symbol, openTabs: tabs };
+    });
+  },
   setTimeframe: (timeframe) => { localStorage.setItem('ax_tf', timeframe); set({ timeframe }); },
   setChartType: (chartType) => set({ chartType }),
   setAccountId: (accountId) => {
@@ -62,6 +78,22 @@ export const useTerminal = create<TerminalState>((set) => ({
   }),
   applyCandleEvent: (c) => set((s) => ({ candleEvents: { ...s.candleEvents, [`${c.symbol}|${c.timeframe}`]: c } })),
   setClockOffset: (clockOffset) => set({ clockOffset }),
+  addTab: (sym) => set((s) => {
+    localStorage.setItem('ax_active_sym', sym);
+    if (s.openTabs.includes(sym)) return { symbol: sym };
+    const tabs = [...s.openTabs, sym];
+    localStorage.setItem('ax_tabs', JSON.stringify(tabs));
+    return { openTabs: tabs, symbol: sym };
+  }),
+  closeTab: (sym) => set((s) => {
+    if (s.openTabs.length <= 1) return s;
+    const tabs = s.openTabs.filter((t) => t !== sym);
+    localStorage.setItem('ax_tabs', JSON.stringify(tabs));
+    const nextSym = s.symbol === sym ? tabs[0] : s.symbol;
+    localStorage.setItem('ax_active_sym', nextSym);
+    return { openTabs: tabs, symbol: nextSym };
+  }),
+  setPendingTrade: (pendingTrade) => set({ pendingTrade }),
   toggleFavorite: (sym) => set((s) => {
     const favs = s.favorites.includes(sym) ? s.favorites.filter((f) => f !== sym) : [...s.favorites, sym];
     localStorage.setItem('ax_favs', JSON.stringify(favs));

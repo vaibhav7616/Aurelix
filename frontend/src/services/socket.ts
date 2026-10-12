@@ -23,8 +23,12 @@ export function connectSocket(): Socket {
   });
   startQuoteWatchdog();
 
+  let wasConnected = false;
   socket.on('connect', () => {
     if (subscribed.length) socket?.emit('market:subscribe', subscribed);
+    // reconnect: candles formed while offline are on the server — reload history instead of bridging flat bars
+    if (wasConnected) void queryClient.invalidateQueries({ queryKey: ['candles'] });
+    wasConnected = true;
   });
   socket.on('market:tick', (t: Tick) => {
     useTerminal.getState().applyTick(t);
@@ -57,6 +61,16 @@ export function connectSocket(): Socket {
     const p = Number(o.profit ?? 0);
     const text = o.status === 'WON' ? `Won ${o.symbol} ${o.direction === 'UP' ? '▲' : '▼'}  +$${p.toFixed(2)}` : o.status === 'TIE' ? `Tie ${o.symbol} — stake returned` : `Lost ${o.symbol} ${o.direction === 'UP' ? '▲' : '▼'}  −$${Math.abs(p).toFixed(2)}`;
     useUI.getState().push(o.status === 'WON' ? 'ok' : o.status === 'TIE' ? 'info' : 'err', text);
+  });
+  socket.on('pending:updated', (p: { status: string; symbol: string; direction: string; reason: string | null }) => {
+    queryClient.invalidateQueries({ queryKey: ['pending'] });
+    queryClient.invalidateQueries({ queryKey: ['accounts'] });
+    if (p.status === 'EXECUTED') {
+      queryClient.invalidateQueries({ queryKey: ['options'] });
+      useUI.getState().push('ok', `Pending trade opened: ${p.direction} ${p.symbol}`);
+    } else if (p.status === 'FAILED' || p.status === 'EXPIRED') {
+      useUI.getState().push('info', `Pending trade ${p.status.toLowerCase()}: ${p.symbol}${p.reason ? ` — ${p.reason}` : ''}`);
+    }
   });
   socket.on('balance:updated', () => {
     queryClient.invalidateQueries({ queryKey: ['accounts'] });

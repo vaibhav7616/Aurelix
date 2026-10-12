@@ -4,8 +4,9 @@ import { prisma } from '../config/database';
 import { ah } from '../utils/asyncHandler';
 import { requireAuth, AuthedRequest } from '../middleware/auth';
 import { validateBody } from '../middleware/validate';
-import { openOptionSchema } from '../schemas/trading';
-import { openOption, listOptions, optionStats, OPTION_DURATIONS_SEC, MIN_DURATION_SEC, MAX_DURATION_SEC } from '../trading/optionsEngine';
+import { openOptionSchema, pendingOptionSchema } from '../schemas/trading';
+import { openOption, listOptions, optionStats, OPTION_DURATIONS_SEC, MIN_DURATION_SEC, MAX_DURATION_SEC, FIXED_TIME_MIN_LEAD_SEC } from '../trading/optionsEngine';
+import { createPending, cancelPending, listPending, PENDING_VALIDITY_MS } from '../trading/pendingEngine';
 import { parsePage, pageMeta } from '../utils/pagination';
 import { orderLimiter } from '../middleware/rateLimit';
 import { Err } from '../utils/errors';
@@ -22,6 +23,8 @@ r.get('/config', ah(async (_req, res) => {
       durations: OPTION_DURATIONS_SEC,
       minDurationSec: MIN_DURATION_SEC,
       maxDurationSec: MAX_DURATION_SEC,
+      fixedTimeMinLeadSec: FIXED_TIME_MIN_LEAD_SEC,
+      pendingValidityMs: PENDING_VALIDITY_MS,
       serverTime: Date.now(),
       assets: assets.map((a) => ({ symbol: a.symbol, payoutPct: a.payoutPct, minStake: Number(a.minOrder), maxStake: Number(a.maxOrder), enabled: a.enabled })),
     },
@@ -31,13 +34,28 @@ r.get('/config', ah(async (_req, res) => {
 
 // Open a trade: stake debited now, settled server-side at expiry
 r.post('/', orderLimiter, validateBody(openOptionSchema), ah(async (req: AuthedRequest, res) => {
-  const b = req.body as { accountId: string; symbol: string; direction: 'UP' | 'DOWN'; stake: number; durationSec: number };
+  const b = req.body as { accountId: string; symbol: string; direction: 'UP' | 'DOWN'; stake: number; durationSec?: number; expiresAt?: number };
   const result = await openOption({
-    userId: req.userId!, accountId: b.accountId, symbol: b.symbol, direction: b.direction, stake: b.stake, durationSec: b.durationSec,
+    userId: req.userId!, accountId: b.accountId, symbol: b.symbol, direction: b.direction, stake: b.stake, durationSec: b.durationSec, expiresAt: b.expiresAt,
     idempotencyKey: req.headers['idempotency-key'] as string | undefined,
     ip: req.ip, userAgent: req.headers['user-agent'],
   });
   res.status(result.replayed ? 200 : 201).json({ success: true, data: result, error: null });
+}));
+
+// Pending trades (execution by price): stake reserved now, trade opens when the quote reaches targetPrice
+r.post('/pending', orderLimiter, validateBody(pendingOptionSchema), ah(async (req: AuthedRequest, res) => {
+  const b = req.body as { accountId: string; symbol: string; direction: 'UP' | 'DOWN'; stake: number; durationSec: number; targetPrice: number };
+  const out = await createPending({ userId: req.userId!, ...b, ip: req.ip, userAgent: req.headers['user-agent'] });
+  res.status(201).json({ success: true, data: out, error: null });
+}));
+r.get('/pending', ah(async (req: AuthedRequest, res) => {
+  const accountId = req.query.accountId as string | undefined;
+  const all = String(req.query.all ?? '') === 'true';
+  res.json({ success: true, data: await listPending(req.userId!, accountId, !all), error: null });
+}));
+r.delete('/pending/:id', ah(async (req: AuthedRequest, res) => {
+  res.json({ success: true, data: await cancelPending(req.userId!, req.params.id), error: null });
 }));
 
 // Open (running) trades

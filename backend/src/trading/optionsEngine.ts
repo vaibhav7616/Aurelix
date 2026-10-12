@@ -21,6 +21,8 @@ import { randomUUID } from 'crypto';
 export const OPTION_DURATIONS_SEC = [5, 10, 15, 30, 60, 120, 180, 300, 600, 900, 1800, 3600] as const;
 export const MIN_DURATION_SEC = 5;
 export const MAX_DURATION_SEC = 4 * 3600;
+/** "Time" mode (fixed clock expiry): expiry must be a whole minute at least this far away (Quotex cut-off). */
+export const FIXED_TIME_MIN_LEAD_SEC = 30;
 
 export type Direction = 'UP' | 'DOWN';
 export type Outcome = 'WON' | 'LOST' | 'TIE';
@@ -31,7 +33,12 @@ export interface OpenOptionInput {
   symbol: string;
   direction: Direction;
   stake: number;
-  durationSec: number;
+  /** "Timer" mode: trade runs for durationSec from the moment it opens */
+  durationSec?: number;
+  /** "Time" mode: trade expires at this wall-clock instant (epoch ms, whole minute) */
+  expiresAt?: number;
+  /** set by the pending-trade engine: the stake was reserved by this pending order */
+  fromPendingId?: string;
   idempotencyKey?: string;
   ip?: string;
   userAgent?: string;
@@ -97,10 +104,13 @@ export async function openOption(input: OpenOptionInput) {
     if (dup) return { ...serialize(dup), replayed: true };
   }
 
-  if (!Number.isInteger(input.durationSec) || input.durationSec < MIN_DURATION_SEC || input.durationSec > MAX_DURATION_SEC) {
+  if (input.expiresAt != null) {
+    validateFixedExpiry(input.expiresAt, Date.now());
+  } else if (!Number.isInteger(input.durationSec) || input.durationSec! < MIN_DURATION_SEC || input.durationSec! > MAX_DURATION_SEC) {
     throw Err.validation(`Duration must be between ${MIN_DURATION_SEC}s and ${MAX_DURATION_SEC / 3600}h`);
   }
   const stake = round2(input.stake);
+  const pendingId = input.fromPendingId;
 
   const [account, asset] = await Promise.all([
     prisma.account.findFirst({ where: { id: input.accountId, userId: input.userId } }),
@@ -127,7 +137,8 @@ export async function openOption(input: OpenOptionInput) {
       accountId: account.id,
       accountType: account.accountType,
       accountStatus: account.status,
-      availableBalance: Number(account.balance) - Number(account.lockedBalance),
+      // a pending order already reserved this stake — count it as available for its own execution
+      availableBalance: Number(account.balance) - Number(account.lockedBalance) + (pendingId ? stake : 0),
       assetEnabled: asset.enabled,
       symbol: asset.symbol,
       amount: stake,
@@ -141,28 +152,52 @@ export async function openOption(input: OpenOptionInput) {
 
   const id = randomUUID();
   const openedAt = new Date();
-  const expiresAt = new Date(openedAt.getTime() + input.durationSec * 1000);
+  let expiresAt: Date;
+  let durationSec: number;
+  if (input.expiresAt != null) {
+    validateFixedExpiry(input.expiresAt, openedAt.getTime()); // re-check: the request may have waited on the DB
+    expiresAt = new Date(input.expiresAt);
+    durationSec = Math.round((expiresAt.getTime() - openedAt.getTime()) / 1000);
+  } else {
+    durationSec = input.durationSec!;
+    expiresAt = new Date(openedAt.getTime() + durationSec * 1000);
+  }
 
   const created = await prisma.$transaction(async (tx) => {
+    if (pendingId) {
+      // claim the pending order exactly once and release its reserved stake; the debit below takes it for real
+      const claimed = await tx.pendingOption.updateMany({
+        where: { id: pendingId, status: 'PENDING' },
+        data: { status: 'EXECUTED', closedAt: openedAt, optionId: id },
+      });
+      if (claimed.count !== 1) throw Err.validation('Pending trade is no longer active');
+      await tx.account.update({ where: { id: account.id }, data: { lockedBalance: { decrement: stake } } });
+    }
     // Re-read balance inside the txn and debit the stake atomically (guards double-spend on rapid clicks).
     const fresh = await tx.account.findUnique({ where: { id: account.id } });
     if (!fresh) throw Err.notFound('Trading account not found');
     const available = Number(fresh.balance) - Number(fresh.lockedBalance);
     if (stake > available) throw Err.insufficientBalance();
-    const newBal = round2(Number(fresh.balance) - stake);
-    await tx.account.update({ where: { id: fresh.id }, data: { balance: newBal } });
+    // conditional atomic debit: fails instead of overdrawing if a parallel request/settlement changed the balance
+    const debited = await tx.account.updateMany({
+      where: { id: fresh.id, balance: { gte: stake + Number(fresh.lockedBalance) } },
+      data: { balance: { decrement: stake } },
+    });
+    if (debited.count !== 1) throw Err.insufficientBalance();
+    const after = await tx.account.findUniqueOrThrow({ where: { id: fresh.id } });
+    const newBal = round2(Number(after.balance));
 
     const opt = await tx.binaryOption.create({
       data: {
         id, userId: input.userId, accountId: fresh.id, assetId: asset.id,
         direction: input.direction, stake, payoutPct: asset.payoutPct,
-        entryPrice, durationSec: input.durationSec, openedAt, expiresAt,
+        entryPrice, durationSec, openedAt, expiresAt,
         status: 'OPEN', idempotencyKey: key || null,
       },
       include: { asset: true },
     });
     await tx.walletTransaction.create({
-      data: { accountId: fresh.id, type: 'TRADE', amount: -stake, balanceAfter: newBal, reference: id, memo: `Option ${input.direction} ${asset.symbol} · ${input.durationSec}s stake` },
+      data: { accountId: fresh.id, type: 'TRADE', amount: -stake, balanceAfter: newBal, reference: id, memo: `Option ${input.direction} ${asset.symbol} · ${input.expiresAt != null ? `until ${expiresAt.toISOString().slice(11, 16)} UTC` : `${durationSec}s`} stake${pendingId ? ' (pending trade)' : ''}` },
     });
     if (key) {
       await tx.idempotencyKey.upsert({
@@ -178,9 +213,20 @@ export async function openOption(input: OpenOptionInput) {
 
   emitToUser(input.userId, 'option:opened', out);
   emitToUser(input.userId, 'balance:updated', { accountId: account.id, balance: created.newBal });
-  await audit({ actorId: input.userId, action: 'OPTION_OPEN', entityType: 'BinaryOption', entityId: id, metadata: { symbol: asset.symbol, direction: input.direction, stake, durationSec: input.durationSec, entryPrice }, ipAddress: input.ip, userAgent: input.userAgent });
+  await audit({ actorId: input.userId, action: 'OPTION_OPEN', entityType: 'BinaryOption', entityId: id, metadata: { symbol: asset.symbol, direction: input.direction, stake, durationSec, expiresAt: expiresAt.toISOString(), mode: input.expiresAt != null ? 'TIME' : 'TIMER', pendingId, entryPrice }, ipAddress: input.ip, userAgent: input.userAgent });
 
   return { ...out, balance: created.newBal, replayed: false };
+}
+
+/**
+ * "Time" mode rules (Quotex): the trade closes at a whole minute on the clock, purchases for a
+ * given minute close FIXED_TIME_MIN_LEAD_SEC before it, and the horizon is capped like Timer mode.
+ */
+export function validateFixedExpiry(expiresAtMs: number, nowMs: number): void {
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs % 60_000 !== 0) throw Err.validation('Expiry time must be a whole minute');
+  const lead = (expiresAtMs - nowMs) / 1000;
+  if (lead < FIXED_TIME_MIN_LEAD_SEC) throw Err.validation(`Purchases for this expiry are closed — pick a time at least ${FIXED_TIME_MIN_LEAD_SEC}s ahead`);
+  if (lead > MAX_DURATION_SEC) throw Err.validation(`Expiry can be at most ${MAX_DURATION_SEC / 3600}h ahead`);
 }
 
 // ─────────────────────────────────────────────────────── settle ──
@@ -196,20 +242,27 @@ export async function settleOption(optionId: string, closePrice: number, now = n
     const profit = optionProfit(outcome, stake, o.payoutPct);
     const credit = settlementCredit(outcome, stake, o.payoutPct);
 
-    const acct = await tx.account.findUnique({ where: { id: o.accountId } });
-    if (!acct) return null;
-    const newBal = round2(Number(acct.balance) + credit);
+    // Claim the option first with a conditional update: only ONE concurrent settler can flip
+    // OPEN → outcome, so the payout can never be credited twice (READ COMMITTED would let two
+    // transactions both see status OPEN above).
+    const claimed = await tx.binaryOption.updateMany({
+      where: { id: o.id, status: 'OPEN' },
+      data: { status: outcome, closePrice, profit, settledAt: now },
+    });
+    if (claimed.count !== 1) return null;
+
+    const acct = credit !== 0
+      // atomic increment — never a read-modify-write that could overwrite a concurrent stake debit
+      ? await tx.account.update({ where: { id: o.accountId }, data: { balance: { increment: credit } } })
+      : await tx.account.findUnique({ where: { id: o.accountId } });
+    if (!acct) throw new Error('account missing');
+    const newBal = round2(Number(acct.balance));
     if (credit !== 0) {
-      await tx.account.update({ where: { id: acct.id }, data: { balance: newBal } });
       await tx.walletTransaction.create({
         data: { accountId: acct.id, type: 'TRADE', amount: credit, balanceAfter: newBal, reference: o.id, memo: `Option ${outcome} ${o.asset.symbol} · ${outcome === 'WON' ? `+${profit.toFixed(2)} payout` : 'stake returned'}` },
       });
     }
-    const updated = await tx.binaryOption.update({
-      where: { id: o.id },
-      data: { status: outcome, closePrice, profit, settledAt: now },
-      include: { asset: true },
-    });
+    const updated = await tx.binaryOption.findUniqueOrThrow({ where: { id: o.id }, include: { asset: true } });
     return { updated, newBal, outcome, profit, credit };
   });
   if (!result) return null;
@@ -240,9 +293,14 @@ export async function settleExpired(now = new Date()): Promise<number> {
   const provider = getProvider();
   let n = 0;
   for (const o of due) {
-    const t = await provider.getTick(o.asset.symbol).catch(() => null);
-    // Halted asset: settle at last known price (entry) → TIE, so funds are never stuck.
-    const close = t?.mid ?? Number(o.entryPrice);
+    // Quotex rule: the result is the quote that was live at the expiry instant, not whatever
+    // the price is when this loop happens to run.
+    let close = provider.priceAt?.(o.asset.symbol, o.expiresAt.getTime()) ?? null;
+    if (close == null) {
+      const t = await provider.getTick(o.asset.symbol).catch(() => null);
+      // Halted asset: settle at entry → TIE, so funds are never stuck.
+      close = t?.mid ?? Number(o.entryPrice);
+    }
     const r = await settleOption(o.id, close, now).catch(() => null);
     if (r) n++;
   }

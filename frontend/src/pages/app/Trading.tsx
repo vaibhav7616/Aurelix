@@ -4,7 +4,7 @@ import { get } from '../../lib/api';
 import { useTerminal } from '../../stores/terminalStore';
 import { PriceChart } from '../../components/charts/PriceChart';
 import { Ticket } from '../../components/trading/Ticket';
-import { OpenTradesList, TradeHistoryTable } from '../../components/trading/TradesPanel';
+import { OpenTradesList, PendingTradesList, TradeHistoryTable } from '../../components/trading/TradesPanel';
 import { useIsMobile } from '../../hooks/useMediaQuery';
 import { getAssetMeta } from '../../lib/assetMeta';
 import type { OptionTrade } from '../../lib/options';
@@ -92,7 +92,7 @@ function AssetSelectorModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
   const filtered = assets
     .filter((a) => {
       const meta = getAssetMeta(a.symbol);
-      const effectiveCategory = meta.category;
+      const effectiveCategory: string = meta.category;
       if (cat !== 'ALL' && effectiveCategory !== cat && a.category !== cat) {
         if (cat === 'CURRENCIES' && (a.category === 'FOREX' || effectiveCategory === 'CURRENCIES')) return true;
         if (cat === 'COMMODITIES' && (a.category === 'METALS' || effectiveCategory === 'COMMODITIES')) return true;
@@ -229,7 +229,10 @@ function RailTabs() {
       </div>
       <div className="flex-1 overflow-y-auto min-h-0 p-2">
         {tab === 'trades' ? (
-          <OpenTradesList accountId={accountId} />
+          <>
+            <PendingTradesList accountId={accountId} />
+            <OpenTradesList accountId={accountId} />
+          </>
         ) : (
           <div className="text-[11px]">
             <TradeHistoryTable pageSize={12} compact />

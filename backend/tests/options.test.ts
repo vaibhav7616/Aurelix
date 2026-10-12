@@ -33,3 +33,14 @@ describe('optionProfit / settlementCredit', () => {
     expect(settlementCredit('WON', 33.33, 77)).toBe(58.99);
   });
 });
+
+describe('Time mode (fixed clock expiry)', () => {
+  it('accepts a whole minute at least 30s ahead and rejects everything else', async () => {
+    const { validateFixedExpiry } = await import('../src/trading/optionsEngine');
+    const now = Date.UTC(2026, 9, 12, 10, 0, 10); // 10:00:10
+    expect(() => validateFixedExpiry(Date.UTC(2026, 9, 12, 10, 1, 0), now)).not.toThrow();      // 50s lead
+    expect(() => validateFixedExpiry(Date.UTC(2026, 9, 12, 10, 0, 30), now)).toThrow(/whole minute/);
+    expect(() => validateFixedExpiry(Date.UTC(2026, 9, 12, 10, 1, 0), now + 35_000)).toThrow(/closed/); // 25s lead
+    expect(() => validateFixedExpiry(Date.UTC(2026, 9, 12, 15, 0, 0), now)).toThrow(/at most/);
+  });
+});
