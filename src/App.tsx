@@ -52,7 +52,8 @@ function AppContent() {
   const { isAuthenticated, initDemoSession, refreshMe } = useAuth();
 
   useEffect(() => {
-    // If not authenticated, automatically initialize a demo session with starting balance
+    const path = window.location.pathname;
+    if (path.startsWith('/login') || path.startsWith('/register')) return;
     if (!isAuthenticated) {
       initDemoSession();
     } else {

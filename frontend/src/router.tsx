@@ -21,7 +21,9 @@ import type { ReactNode } from 'react';
 
 function Guard({ children, admin }: { children: ReactNode; admin?: boolean }) {
   const { user, ready } = useAuth();
-  if (!ready) {
+  const token = localStorage.getItem('ax_access') ?? sessionStorage.getItem('ax_access');
+
+  if (!ready && token) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-base-950">
         <img src="/logo.svg" alt="" width={36} height={36} />
@@ -29,8 +31,8 @@ function Guard({ children, admin }: { children: ReactNode; admin?: boolean }) {
       </div>
     );
   }
-  if (!user) return <Navigate to="/login" replace />;
-  if (admin && user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') return <Navigate to="/trading" replace />;
+  if (!user && !token) return <Navigate to="/login" replace />;
+  if (admin && user && user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') return <Navigate to="/trading" replace />;
   return <>{children}</>;
 }
 

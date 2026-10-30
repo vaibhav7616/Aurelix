@@ -61,8 +61,9 @@ r.get('/', ah(async (req: AuthedRequest, res) => {
     const positions = await prisma.position.findMany({ where: { accountId: a.id, status: 'OPEN' }, include: { asset: true } });
     let unrealized = 0;
     for (const p of positions) {
-      const t = await provider.getTick(p.asset.symbol).catch(() => null);
-      const cur = t?.mid ?? Number(p.currentPrice);
+      const sym = p.asset?.symbol || (p as any).symbol;
+      const t = sym ? await provider.getTick(sym).catch(() => null) : null;
+      const cur = t?.mid ?? Number(p.currentPrice || 0);
       unrealized += netPnl({ side: p.side as 'BUY' | 'SELL', entryPrice: Number(p.entryPrice), currentPrice: cur, quantity: Number(p.quantity), feeBps: 0 }).gross;
     }
     const balance = Number(a.balance);

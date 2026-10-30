@@ -70,8 +70,9 @@ export const useAuth = create<AuthState>((set, getStore) => ({
 
   refreshMe: async () => {
     try {
-      const res = await get<{ user: User }>('/api/v1/users/me');
-      set({ user: res.user, isAuthenticated: true });
+      const res = await get<any>('/api/v1/users/me').catch(() => get<any>('/api/v1/auth/me'));
+      const u = res?.user ?? res;
+      if (u?.id) set({ user: u, isAuthenticated: true });
     } catch {
       set({ user: null, isAuthenticated: false });
     }

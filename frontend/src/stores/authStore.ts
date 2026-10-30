@@ -46,8 +46,9 @@ export const useAuth = create<AuthState>((set) => ({
   bootstrap: async () => {
     if (!getAccessToken()) { set({ ready: true }); return; }
     try {
-      const me = await get<User>('/api/v1/auth/me');
-      set({ user: me });
+      const me = await get<any>('/api/v1/auth/me').catch(() => get<any>('/api/v1/users/me'));
+      const u = me?.user ?? me;
+      if (u?.id) set({ user: u });
     } catch { setTokens(null, null); }
     set({ ready: true });
   },
