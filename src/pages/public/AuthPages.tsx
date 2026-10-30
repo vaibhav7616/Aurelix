@@ -113,9 +113,13 @@ export function LoginPage() {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true); setErr(null);
-    try { await login(email.trim(), password, remember); nav('/trading'); }
-    catch (e2) { setErr(apiError(e2)); }
-    finally { setBusy(false); }
+    try {
+      await login(email.trim(), password, remember);
+      window.location.href = '/trading';
+    } catch (e2) {
+      setErr(apiError(e2));
+      setBusy(false);
+    }
   };
   const sendReset = async (e: React.FormEvent) => {
     e.preventDefault();
