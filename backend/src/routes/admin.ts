@@ -211,6 +211,38 @@ r.get('/deposits', ah(async (req, res) => {
   res.json({ success: true, data: rows, error: null });
 }));
 
+r.post('/deposits/:id/approve', ah(async (req: AuthedRequest, res) => {
+  const dep = await prisma.deposit.findUnique({ where: { id: req.params.id } });
+  if (!dep) { res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'Deposit not found' } }); return; }
+  if (dep.status === 'COMPLETED') { res.json({ success: true, data: dep, error: null }); return; }
+  const amount = Number(dep.amount);
+  const out = await prisma.$transaction(async (tx) => {
+    const acct = await tx.account.findUnique({ where: { id: dep.accountId } });
+    if (!acct) throw new Error('Account missing');
+    const newBal = Number(acct.balance) + amount;
+    await tx.account.update({ where: { id: acct.id }, data: { balance: newBal } });
+    await tx.walletTransaction.create({
+      data: { accountId: acct.id, type: 'DEPOSIT', amount, balanceAfter: newBal, reference: dep.providerRef, memo: `Deposit approved by admin (${dep.provider})` },
+    });
+    const completed = await tx.deposit.update({ where: { id: dep.id }, data: { status: 'COMPLETED' } });
+    return { newBal, completed };
+  });
+  emitToUser(dep.userId, 'balance:updated', { accountId: dep.accountId, balance: out.newBal });
+  await notify({ userId: dep.userId, type: 'DEPOSIT', title: 'Deposit approved!', message: `+$${amount.toFixed(2)} USD credited to your account.` });
+  await audit({ actorId: req.userId, action: 'DEPOSIT_APPROVE', entityType: 'Deposit', entityId: dep.id, metadata: { amount } });
+  res.json({ success: true, data: out.completed, error: null });
+}));
+
+r.post('/deposits/:id/reject', ah(async (req: AuthedRequest, res) => {
+  const { reason } = (req.body ?? {}) as { reason?: string };
+  const dep = await prisma.deposit.findUnique({ where: { id: req.params.id } });
+  if (!dep) { res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'Deposit not found' } }); return; }
+  const rejected = await prisma.deposit.update({ where: { id: dep.id }, data: { status: 'FAILED' } });
+  await notify({ userId: dep.userId, type: 'DEPOSIT', title: 'Deposit rejected', message: reason ?? 'Deposit could not be verified' });
+  await audit({ actorId: req.userId, action: 'DEPOSIT_REJECT', entityType: 'Deposit', entityId: dep.id, metadata: { reason } });
+  res.json({ success: true, data: rejected, error: null });
+}));
+
 r.get('/market', ah(async (_req, res) => {
   const provider = getProvider();
   const symbols = demoProvider()?.getSymbols() ?? [];

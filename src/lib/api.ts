@@ -120,7 +120,14 @@ export async function put<T>(url: string, body?: unknown): Promise<T> {
 export function apiError(e: unknown): string {
   if (axios.isAxiosError(e)) {
     const d = e.response?.data as Envelope<null> | undefined;
-    return d?.error?.message ?? e.message;
+    if (d?.error?.message) return d.error.message;
+    if (typeof e.response?.data === 'string' && e.response.data.length < 150 && !e.response.data.includes('<html')) {
+      return e.response.data;
+    }
+    if (e.response?.status === 401) return 'Invalid username or password';
+    if (e.response?.status === 400 || e.response?.status === 422) return 'Invalid login credentials format';
+    if (e.response?.status === 500) return 'Server error during authentication. Please retry.';
+    return e.message;
   }
   return (e as Error).message ?? 'Something went wrong';
 }

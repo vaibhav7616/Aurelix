@@ -1,28 +1,31 @@
+import { useSettingsStore } from '../stores/settingsStore';
+
 // Web Audio API Synthesizer for Quotex-style trading sounds
 class SoundService {
   private ctx: AudioContext | null = null;
   private enabled = true;
 
   constructor() {
-    this.enabled = localStorage.getItem('ax_sound') !== 'false';
+    this.enabled = localStorage.getItem('ax_sound_master') !== 'false';
   }
 
   public isEnabled(): boolean {
-    return this.enabled;
+    return useSettingsStore.getState().soundMaster;
   }
 
   public setEnabled(val: boolean) {
     this.enabled = val;
-    localStorage.setItem('ax_sound', val ? 'true' : 'false');
+    useSettingsStore.getState().setSoundMaster(val);
   }
 
   public toggle(): boolean {
-    this.setEnabled(!this.enabled);
-    return this.enabled;
+    const cur = this.isEnabled();
+    this.setEnabled(!cur);
+    return !cur;
   }
 
   private getContext(): AudioContext | null {
-    if (!this.enabled) return null;
+    if (!this.isEnabled()) return null;
     try {
       if (!this.ctx) {
         const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -38,6 +41,7 @@ class SoundService {
   }
 
   public playClick() {
+    if (!useSettingsStore.getState().soundClick) return;
     const ctx = this.getContext();
     if (!ctx) return;
     try {
@@ -56,6 +60,7 @@ class SoundService {
   }
 
   public playTradePlaced() {
+    if (!useSettingsStore.getState().soundClick) return;
     const ctx = this.getContext();
     if (!ctx) return;
     try {
@@ -75,6 +80,7 @@ class SoundService {
   }
 
   public playTradeWon() {
+    if (!useSettingsStore.getState().soundWin) return;
     const ctx = this.getContext();
     if (!ctx) return;
     try {
@@ -96,6 +102,7 @@ class SoundService {
   }
 
   public playTradeLost() {
+    if (!useSettingsStore.getState().soundLoss) return;
     const ctx = this.getContext();
     if (!ctx) return;
     try {

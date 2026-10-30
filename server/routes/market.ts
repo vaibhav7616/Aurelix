@@ -3,6 +3,8 @@ import { ah } from '../utils/asyncHandler';
 import { getProvider } from '../services/marketService';
 import { prisma } from '../config/database';
 import { orderCandles } from '../market/MarketDataProvider';
+import { getLiveSignals } from '../services/signalsService';
+import { getAllLiveRates } from '../services/exchangeRateService';
 
 const r = Router();
 
@@ -83,7 +85,24 @@ r.get('/candles', ah(async (req, res) => {
     const rows = await prisma.marketCandle.findMany({ where: { symbol, timeframe }, orderBy: { openTime: 'desc' }, take: limit }).catch(() => []);
     candles = orderCandles(rows.reverse().map((c) => ({ symbol: c.symbol, timeframe: c.timeframe, open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), volume: Number(c.volume), openTime: c.openTime.getTime(), closeTime: c.closeTime.getTime() })));
   }
-  res.json({ success: true, data: { demo: getProvider().isDemo, candles }, error: null });
+  res.json({ success: true, data: { demo: getProvider().isDemo, candles, serverTime: Date.now() }, error: null });
+});
+
+// Quotex Algorithmic Trading Signals (RSI, MACD, EMA momentum across timeframes)
+r.get('/signals', ah(async (_req, res) => {
+  const data = await getLiveSignals();
+  res.json({ success: true, data, error: null });
 }));
+
+// Multi-currency live daily FX exchange rates (USD, INR, EUR, BRL, GBP)
+r.get('/rates', ah(async (_req, res) => {
+  const rates = await getAllLiveRates();
+  res.json({ success: true, data: rates, error: null });
+}));
+
+// Server health & latency ping for trader settings calibration
+r.get('/ping', (_req, res) => {
+  res.json({ success: true, data: { serverTime: Date.now(), status: 'OK' }, error: null });
+});
 
 export default r;

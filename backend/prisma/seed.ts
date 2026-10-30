@@ -61,6 +61,12 @@ async function main(): Promise<void> {
       });
       await prisma.walletTransaction.create({ data: { accountId: acct.id, type: 'DEPOSIT', amount: starting, balanceAfter: starting, memo: 'Demo starting balance (simulated)' } });
     }
+    const hasLive = await prisma.account.findFirst({ where: { userId: user.id, accountType: 'LIVE' } });
+    if (!hasLive) {
+      await prisma.account.create({
+        data: { userId: user.id, accountNumber: `AX-REAL-${Math.floor(Math.random() * 1e6)}`, accountType: 'LIVE', currency: 'USD', balance: 0.00, status: 'ACTIVE' },
+      });
+    }
     return user;
   };
 

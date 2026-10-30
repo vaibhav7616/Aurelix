@@ -5,9 +5,11 @@ export class ApiError extends Error {
   details?: unknown;
   constructor(code: string, message: string, status = 400, details?: unknown) {
     super(message);
+    this.name = 'ApiError';
     this.code = code;
     this.status = status;
     this.details = details;
+    Object.setPrototypeOf(this, ApiError.prototype);
   }
 }
 
@@ -35,13 +37,25 @@ export const Err = {
 };
 
 export function toEnvelopeError(e: unknown): { code: string; message: string; status: number; details?: unknown } {
-  if (e instanceof ApiError) return { code: e.code, message: e.message, status: e.status, details: e.details };
+  if (e instanceof ApiError || (e && typeof e === 'object' && 'code' in e && 'status' in e)) {
+    const anyE = e as any;
+    return { code: anyE.code, message: anyE.message || 'Error', status: anyE.status || 400, details: anyE.details };
+  }
   const name = (e as { name?: string })?.name;
   if (name === 'TokenExpiredError') {
     return { code: 'UNAUTHORIZED', message: 'Token expired', status: 401 };
   }
   if (name === 'JsonWebTokenError' || name === 'NotBeforeError') {
     return { code: 'UNAUTHORIZED', message: 'Invalid token', status: 401 };
+  }
+  const errObj = e as any;
+  if (errObj && typeof errObj === 'object') {
+    if (typeof errObj.status === 'number') {
+      return { code: errObj.code || 'ERROR', message: errObj.message || 'Error', status: errObj.status, details: errObj.details };
+    }
+    if (errObj.message && typeof errObj.message === 'string') {
+      return { code: 'INTERNAL_ERROR', message: errObj.message, status: 500 };
+    }
   }
   return { code: 'INTERNAL_ERROR', message: 'Internal server error', status: 500 };
 }

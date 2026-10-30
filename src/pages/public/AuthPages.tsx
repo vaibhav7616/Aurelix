@@ -130,7 +130,7 @@ export function LoginPage() {
       {!forgot ? (
         <form onSubmit={submit} className="space-y-3.5">
           <div><h1 className="text-lg font-bold tracking-tight">Welcome back</h1><p className="text-xs text-mute mt-0.5">Log in to enter the trading terminal.</p></div>
-          <div><label className="ax-label">Username or email</label><input className="ax-input" type="text" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="admin or you@example.com" required /></div>
+          <div><label className="ax-label">Username or email</label><input className="ax-input" type="text" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com or username" required /></div>
           <div><label className="ax-label">Password</label><input className="ax-input" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required /></div>
           <div className="flex items-center justify-between">
             <label className="flex items-center gap-2 text-xs text-fog cursor-pointer"><input type="checkbox" className="ax-check" checked={remember} onChange={(e) => setRemember(e.target.checked)} /> Remember me</label>

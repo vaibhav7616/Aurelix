@@ -1,23 +1,34 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createChart, ColorType, CrosshairMode, LineStyle,
   type IChartApi, type ISeriesApi, type Time, type MouseEventParams,
   type BarPrice, type DeepPartial, type PriceFormatCustom,
 } from 'lightweight-charts';
 import { get } from '../../lib/api';
-import { useTerminal, type Tick } from '../../stores/terminalStore';
-import { fmtPrice } from '../../lib/format';
+import { useTerminal, serverNow, type Tick, type LiveCandle } from '../../stores/terminalStore';
+import { useSettingsStore } from '../../stores/settingsStore';
+import { fmtPrice, fmtMoney } from '../../lib/format';
 import { normalizeCandles } from '../../lib/candles';
-import { fmtHMS, secondsLeft, previewOutcome, type OptionTrade } from '../../lib/options';
+import { fmtHMS, secondsLeft, previewOutcome, payoutFor, type OptionTrade, type OptionStatus } from '../../lib/options';
 import { getAssetMeta } from '../../lib/assetMeta';
 import { connectSocket, subscribeMarket } from '../../services/socket';
 import { clsx } from 'clsx';
 
 interface Candle { open: number; high: number; low: number; close: number; volume: number; openTime: number; closeTime?: number; symbol?: string; timeframe?: string }
-type Tool = 'select' | 'trend' | 'hline' | 'support' | 'resistance';
-type DrawType = 'trend' | 'hline' | 'support' | 'resistance';
+type Tool = 'select' | 'trend' | 'hline' | 'support' | 'resistance' | 'fibonacci';
+type DrawType = 'trend' | 'hline' | 'support' | 'resistance' | 'fibonacci';
 interface Drawing { id: string; type: DrawType; t1: number; p1: number; t2?: number; p2?: number }
+
+const FIB_LEVELS = [
+  { pct: 0, label: '0.0%', color: '#94a3b8' },
+  { pct: 0.236, label: '23.6%', color: '#f59e0b' },
+  { pct: 0.382, label: '38.2%', color: '#10b981' },
+  { pct: 0.5, label: '50.0%', color: '#06b6d4' },
+  { pct: 0.618, label: '61.8%', color: '#eab308' },
+  { pct: 0.786, label: '78.6%', color: '#ec4899' },
+  { pct: 1.0, label: '100.0%', color: '#8b5cf6' },
+];
 
 // Quotex official binary candle colors (matched to platform screenshot)
 const UP = '#0faf59';
@@ -112,12 +123,152 @@ function macd(values: number[], fast = 12, slow = 26, signal = 9): Array<{ m: nu
   return out;
 }
 
-interface IndState { vol: boolean; sma20: boolean; sma50: boolean; ema20: boolean; bb: boolean; osc: 'none' | 'rsi' | 'macd' }
-const DEFAULT_INDS: IndState = { vol: false, sma20: false, sma50: false, ema20: false, bb: false, osc: 'none' };
+function stochastic(candles: Candle[], kPeriod = 14, dPeriod = 3, smooth = 3): Array<{ k: number; d: number } | null> {
+  const out: Array<{ k: number; d: number } | null> = new Array(candles.length).fill(null);
+  if (candles.length < kPeriod) return out;
+
+  const rawK: Array<number | null> = [];
+  for (let i = 0; i < candles.length; i++) {
+    if (i < kPeriod - 1) {
+      rawK.push(null);
+      continue;
+    }
+    const window = candles.slice(i - kPeriod + 1, i + 1);
+    const highestHigh = Math.max(...window.map((c) => c.high));
+    const lowestLow = Math.min(...window.map((c) => c.low));
+    const currentClose = candles[i].close;
+    const range = highestHigh - lowestLow;
+    const k = range === 0 ? 50 : ((currentClose - lowestLow) / range) * 100;
+    rawK.push(k);
+  }
+
+  const smoothedK = sma(rawK.map((v) => (v === null ? 0 : v)), smooth);
+  const validK = smoothedK.map((v, i) => (rawK[i] === null ? null : v));
+  const validD = sma(validK.map((v) => (v === null ? 0 : v)), dPeriod);
+
+  for (let i = 0; i < candles.length; i++) {
+    if (i >= kPeriod + smooth + dPeriod - 3 && validK[i] !== null && validD[i] !== null) {
+      out[i] = { k: Math.min(100, Math.max(0, validK[i]!)), d: Math.min(100, Math.max(0, validD[i]!)) };
+    }
+  }
+  return out;
+}
+
+function parabolicSar(candles: Candle[], step = 0.02, maxStep = 0.2): Array<number | null> {
+  const out: Array<number | null> = new Array(candles.length).fill(null);
+  if (candles.length < 2) return out;
+
+  let isUp = candles[1].close >= candles[0].close;
+  let ep = isUp ? Math.max(candles[0].high, candles[1].high) : Math.min(candles[0].low, candles[1].low);
+  let sar = isUp ? Math.min(candles[0].low, candles[1].low) : Math.max(candles[0].high, candles[1].high);
+  let af = step;
+
+  out[0] = sar;
+  for (let i = 1; i < candles.length; i++) {
+    sar = sar + af * (ep - sar);
+    if (isUp) {
+      if (i > 1) sar = Math.min(sar, candles[i - 1].low, candles[i - 2].low);
+      if (candles[i].low < sar) {
+        isUp = false;
+        sar = ep;
+        ep = candles[i].low;
+        af = step;
+      } else {
+        if (candles[i].high > ep) {
+          ep = candles[i].high;
+          af = Math.min(af + step, maxStep);
+        }
+      }
+    } else {
+      if (i > 1) sar = Math.max(sar, candles[i - 1].high, candles[i - 2].high);
+      if (candles[i].high > sar) {
+        isUp = true;
+        sar = ep;
+        ep = candles[i].high;
+        af = step;
+      } else {
+        if (candles[i].low < ep) {
+          ep = candles[i].low;
+          af = Math.min(af + step, maxStep);
+        }
+      }
+    }
+    out[i] = sar;
+  }
+  return out;
+}
+
+function supertrend(candles: Candle[], period = 10, multiplier = 3): Array<{ val: number; dir: 'up' | 'down' } | null> {
+  const out: Array<{ val: number; dir: 'up' | 'down' } | null> = new Array(candles.length).fill(null);
+  if (candles.length < period) return out;
+
+  const tr: number[] = [candles[0].high - candles[0].low];
+  for (let i = 1; i < candles.length; i++) {
+    const hl = candles[i].high - candles[i].low;
+    const hpc = Math.abs(candles[i].high - candles[i - 1].close);
+    const lpc = Math.abs(candles[i].low - candles[i - 1].close);
+    tr.push(Math.max(hl, hpc, lpc));
+  }
+
+  let atr = tr.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  let prevUpper = (candles[period - 1].high + candles[period - 1].low) / 2 + multiplier * atr;
+  let prevLower = (candles[period - 1].high + candles[period - 1].low) / 2 - multiplier * atr;
+  let dir: 'up' | 'down' = 'up';
+
+  for (let i = period; i < candles.length; i++) {
+    atr = (atr * (period - 1) + tr[i]) / period;
+    const hl2 = (candles[i].high + candles[i].low) / 2;
+    let upper = hl2 + multiplier * atr;
+    let lower = hl2 - multiplier * atr;
+
+    if (lower > prevLower || candles[i - 1].close < prevLower) {
+      // keep
+    } else {
+      lower = prevLower;
+    }
+
+    if (upper < prevUpper || candles[i - 1].close > prevUpper) {
+      // keep
+    } else {
+      upper = prevUpper;
+    }
+
+    if (dir === 'up') {
+      if (candles[i].close < lower) {
+        dir = 'down';
+        out[i] = { val: upper, dir: 'down' };
+      } else {
+        out[i] = { val: lower, dir: 'up' };
+      }
+    } else {
+      if (candles[i].close > upper) {
+        dir = 'up';
+        out[i] = { val: lower, dir: 'up' };
+      } else {
+        out[i] = { val: upper, dir: 'down' };
+      }
+    }
+
+    prevUpper = upper;
+    prevLower = lower;
+  }
+  return out;
+}
+
+interface IndState {
+  vol: boolean;
+  sma20: boolean;
+  sma50: boolean;
+  ema20: boolean;
+  bb: boolean;
+  sar: boolean;
+  supertrend: boolean;
+  osc: 'none' | 'rsi' | 'macd' | 'stoch';
+}
+const DEFAULT_INDS: IndState = { vol: false, sma20: false, sma50: false, ema20: false, bb: false, sar: false, supertrend: false, osc: 'none' };
 function loadInds(): IndState {
   try {
     const parsed = JSON.parse(localStorage.getItem('ax_inds') ?? '{}') as Partial<IndState>;
-    // Keep volume disabled by default to maintain clean Quotex layout
     return { ...DEFAULT_INDS, ...parsed, vol: false };
   } catch {
     return DEFAULT_INDS;
@@ -130,12 +281,25 @@ function formatCountdown(sec: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
+function fmtTradeCountdown(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  const m = Math.floor(s / 60);
+  const remS = s % 60;
+  if (s >= 3600) {
+    const h = Math.floor(s / 3600);
+    const remM = m % 60;
+    return `${String(h).padStart(2, '0')}:${String(remM).padStart(2, '0')}:${String(remS).padStart(2, '0')}`;
+  }
+  return `${String(m).padStart(2, '0')}:${String(remS).padStart(2, '0')}`;
+}
+
 export function PriceChart() {
   const symbol = useTerminal((s) => s.symbol);
   const timeframe = useTerminal((s) => s.timeframe);
   const chartType = useTerminal((s) => s.chartType);
   const setTimeframe = useTerminal((s) => s.setTimeframe);
   const setChartType = useTerminal((s) => s.setChartType);
+  const showGrid = useSettingsStore((s) => s.showGrid);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const elRef = useRef<HTMLDivElement>(null);
@@ -183,6 +347,7 @@ export function PriceChart() {
   const pricePillTextRef = useRef<HTMLSpanElement>(null);
   const openPriceTextRef = useRef<HTMLSpanElement>(null);
 
+  const queryClient = useQueryClient();
   const [candleSecondsLeft, setCandleSecondsLeft] = useState<number>(60);
   const [utcClock, setUtcClock] = useState<string>('');
 
@@ -193,7 +358,47 @@ export function PriceChart() {
     refetchInterval: 2500,
   });
   const symTrades = useMemo(() => (openTrades ?? []).filter((t) => t.symbol === symbol), [openTrades, symbol]);
+
+  // Dynamic Crowd Trading Sentiment (Quotex Left Sentiment Bar)
+  const sentiment = useMemo(() => {
+    if (symTrades.length > 0) {
+      const upStake = symTrades.filter((t) => t.direction === 'UP').reduce((a, b) => a + Number(b.stake), 0);
+      const downStake = symTrades.filter((t) => t.direction === 'DOWN').reduce((a, b) => a + Number(b.stake), 0);
+      const total = upStake + downStake;
+      if (total > 0) {
+        const upPct = Math.round((upStake / total) * 100);
+        const up = Math.max(12, Math.min(88, upPct));
+        return { up, down: 100 - up };
+      }
+    }
+    const list = liveCandlesRef.current;
+    if (list.length >= 5) {
+      const recent = list.slice(-14);
+      let greenCount = 0;
+      let bullishWeight = 0;
+      recent.forEach((c) => {
+        if (c.close >= c.open) {
+          greenCount++;
+          bullishWeight += (c.close - c.open) / (c.high - c.low || 1);
+        } else {
+          bullishWeight -= (c.open - c.close) / (c.high - c.low || 1);
+        }
+      });
+      const ratio = greenCount / recent.length;
+      const basePct = Math.round(ratio * 40 + 30 + Math.max(-10, Math.min(10, bullishWeight * 3)));
+      const up = Math.max(25, Math.min(75, basePct));
+      return { up, down: 100 - up };
+    }
+    return { up: 59, down: 41 };
+  }, [symTrades, rev]);
+
   const [clock, setClock] = useState(Date.now());
+
+  // 1-second ticker ensures active trade countdowns tick down continuously
+  useEffect(() => {
+    const timer = setInterval(() => setClock(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Subscribe to market socket for real-time live price flow
   useEffect(() => {
@@ -201,30 +406,31 @@ export function PriceChart() {
     subscribeMarket([symbol]);
   }, [symbol]);
 
-  // Historical candles query (loaded ONCE per symbol/timeframe, real-time ticks take over)
+  const serverTimeOffsetRef = useRef<number>(0);
+
+  // Historical candles query with short staleTime so tab switching refreshes data
   const { data, isLoading } = useQuery({
     queryKey: ['candles', symbol, timeframe],
-    queryFn: () => get<{ candles: Candle[] }>('/api/v1/market/candles', { symbol, timeframe, limit: 240 }),
+    queryFn: () => get<{ candles: Candle[]; serverTime?: number }>('/api/v1/market/candles', { symbol, timeframe, limit: 240 }),
     refetchInterval: false,
-    staleTime: Infinity,
+    staleTime: 5000,
   });
 
-  const candles = useMemo(() => normalizeCandles(data?.candles ?? []), [data]);
-
-  // Immediate reset when symbol or timeframe changes to prevent cross-asset state contamination
   useEffect(() => {
-    liveCandlesRef.current = [];
-    activeCandleRef.current = null;
-    currentPriceRef.current = null;
-    targetPriceRef.current = null;
-    velocityRef.current = 0;
-    setLegend(null);
-  }, [symbol, timeframe]);
+    if (data?.serverTime) {
+      serverTimeOffsetRef.current = data.serverTime - Date.now();
+    }
+  }, [data?.serverTime]);
 
-  // Sync loaded candles into liveCandlesRef
+  const candles = useMemo(() => {
+    const raw = data?.candles ?? [];
+    if (raw.length && raw[0].symbol && raw[0].symbol !== symbol) return [];
+    return normalizeCandles(raw);
+  }, [data, symbol]);
+
+  // Sync loaded candles into liveCandlesRef whenever candles, symbol, or timeframe update
   useEffect(() => {
     if (candles.length) {
-      if (candles[0].symbol && candles[0].symbol !== symbol) return;
       liveCandlesRef.current = candles.map((c) => ({ ...c }));
       const last = candles[candles.length - 1];
       activeCandleRef.current = { ...last };
@@ -233,8 +439,15 @@ export function PriceChart() {
       velocityRef.current = 0;
       setLegend(last);
       bump();
+    } else {
+      liveCandlesRef.current = [];
+      activeCandleRef.current = null;
+      currentPriceRef.current = null;
+      targetPriceRef.current = null;
+      velocityRef.current = 0;
+      setLegend(null);
     }
-  }, [candles, symbol, bump]);
+  }, [candles, symbol, timeframe, bump]);
 
   useEffect(() => {
     try { setDrawings(JSON.parse(localStorage.getItem(`ax_draw_${symbol}_${timeframe}`) ?? '[]')); } catch { setDrawings([]); }
@@ -258,8 +471,8 @@ export function PriceChart() {
         attributionLogo: false,
       },
       grid: {
-        vertLines: { color: GRID },
-        horzLines: { color: GRID },
+        vertLines: { color: showGrid ? GRID : 'transparent' },
+        horzLines: { color: showGrid ? GRID : 'transparent' },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
@@ -291,6 +504,18 @@ export function PriceChart() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Dynamically update grid visibility when setting toggles
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    chart.applyOptions({
+      grid: {
+        vertLines: { color: showGrid ? GRID : 'transparent' },
+        horzLines: { color: showGrid ? GRID : 'transparent' },
+      },
+    });
+  }, [showGrid]);
+
   // Build or rebuild chart series when candles or chart options change
   useEffect(() => {
     const chart = chartRef.current;
@@ -306,7 +531,7 @@ export function PriceChart() {
     chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.08, bottom: hasOsc ? 0.32 : inds.vol ? 0.14 : 0.08 } });
 
     // Quotex-style sub-pip resolution with strictly bounded minMove
-    const pip = /JPY/.test(symbol) ? 0.001 : /BTC|ETH/.test(symbol) ? 0.01 : 0.00001;
+    const pip = /JPY/.test(symbol) ? 0.001 : /BTC|ETH|XAU/.test(symbol) ? 0.01 : 0.00001;
     const priceFormatCustom: DeepPartial<PriceFormatCustom> = {
       type: 'custom',
       minMove: pip,
@@ -379,6 +604,16 @@ export function PriceChart() {
       addOverlay(bb.map((b) => (b ? b.mid : null)), '#64748b', 'bbMid', 1, LineStyle.Dotted);
       addOverlay(bb.map((b) => (b ? b.lo : null)), '#64748b', 'bbLo', 1, LineStyle.Dashed);
     }
+    if (inds.sar) {
+      addOverlay(parabolicSar(candles), '#38bdf8', 'sar', 1, LineStyle.Dotted);
+    }
+    if (inds.supertrend) {
+      const st = supertrend(candles);
+      const stUp = st.map((s) => (s && s.dir === 'up' ? s.val : null));
+      const stDown = st.map((s) => (s && s.dir === 'down' ? s.val : null));
+      addOverlay(stUp, '#00c076', 'stUp', 2);
+      addOverlay(stDown, '#ff5447', 'stDown', 2);
+    }
 
     // Oscillator pane
     if (hasOsc) {
@@ -396,6 +631,27 @@ export function PriceChart() {
         vals.forEach((v, i) => { if (v !== null) pts.push({ time: times[i], value: v }); });
         s.setData(pts);
         oscRefs.current.push(s);
+      } else if (inds.osc === 'stoch') {
+        const vals = stochastic(candles);
+        const mk = (level: number) => {
+          const s = chart.addLineSeries({ color: 'rgba(255,255,255,0.15)', lineWidth: 1, lineStyle: LineStyle.Dashed, priceScaleId: 'osc', priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+          s.setData(times.map((t) => ({ time: t, value: level })));
+          oscRefs.current.push(s);
+        };
+        mk(80); mk(50); mk(20);
+        const kSeries = chart.addLineSeries({ color: '#00c076', lineWidth: 1.5, priceScaleId: 'osc', priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+        const dSeries = chart.addLineSeries({ color: '#ff5447', lineWidth: 1.5, lineStyle: LineStyle.Dashed, priceScaleId: 'osc', priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+        const kPts: Array<{ time: Time; value: number }> = [];
+        const dPts: Array<{ time: Time; value: number }> = [];
+        vals.forEach((v, i) => {
+          if (v !== null) {
+            kPts.push({ time: times[i], value: v.k });
+            dPts.push({ time: times[i], value: v.d });
+          }
+        });
+        kSeries.setData(kPts);
+        dSeries.setData(dPts);
+        oscRefs.current.push(kSeries, dSeries);
       } else {
         const vals = macd(closes);
         const h = chart.addHistogramSeries({ priceScaleId: 'osc', priceLineVisible: false, lastValueVisible: false });
@@ -410,24 +666,25 @@ export function PriceChart() {
       }
     }
 
-    // Apply Quotex candle width and visible logical range (~22 candles visible)
+    // Quotex full-viewport candle width and visible logical range (80+ historical candles)
     chart.timeScale().applyOptions({
-      barSpacing: 26,
-      minBarSpacing: 8,
-      rightOffset: 12,
+      barSpacing: 14,
+      minBarSpacing: 4,
+      rightOffset: 6,
+      shiftVisibleRangeOnNewBar: true,
     });
     const totalBars = candles.length;
     if (totalBars > 0) {
+      const visibleBars = Math.min(totalBars, 80);
       chart.timeScale().setVisibleLogicalRange({
-        from: Math.max(0, totalBars - 22),
-        to: totalBars + 8,
+        from: Math.max(0, totalBars - visibleBars),
+        to: totalBars + 6,
       });
     }
-    chart.timeScale().scrollToRealTime();
     setLegend(candles[candles.length - 1]);
     bump();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candles, symbol, chartType, inds.vol, inds.sma20, inds.sma50, inds.ema20, inds.bb, inds.osc]);
+  }, [candles, symbol, timeframe, chartType, inds.vol, inds.sma20, inds.sma50, inds.ema20, inds.bb, inds.sar, inds.supertrend, inds.osc]);
 
   // Subscribe directly to terminal store ticks without causing PriceChart component re-renders
   useEffect(() => {
@@ -464,11 +721,62 @@ export function PriceChart() {
     };
   }, [symbol]);
 
+  // Server candle lifecycle: the server is authoritative for every finished candle and for the
+  // open of the new one, so the chart always matches the price series trades settle on.
+  useEffect(() => {
+    const key = `${symbol}|${timeframe}`;
+    let lastSeen: LiveCandle | undefined = useTerminal.getState().candleEvents[key];
+    const unsub = useTerminal.subscribe((state) => {
+      const ev = state.candleEvents[key];
+      if (!ev || ev === lastSeen) return;
+      lastSeen = ev;
+      const list = liveCandlesRef.current;
+      const main = mainRef.current;
+      if (!list.length || !main) return;
+      const idx = list.findIndex((c) => c.openTime === ev.openTime);
+      const isLast = idx === list.length - 1;
+      if (ev.event === 'close') {
+        if (idx < 0) return;
+        const c = list[idx];
+        c.open = ev.open; c.high = ev.high; c.low = ev.low; c.close = ev.close;
+      } else {
+        if (idx < 0) return; // client has not rolled into this bucket yet — the roll uses the previous close
+        const c = list[idx];
+        c.open = ev.open;
+        c.high = Math.max(c.high, ev.open);
+        c.low = Math.min(c.low, ev.open);
+      }
+      try {
+        const asBar = (c: Candle) => (chartType === 'candles'
+          ? { time: (c.openTime / 1000) as Time, open: c.open, high: c.high, low: c.low, close: c.close }
+          : { time: (c.openTime / 1000) as Time, value: c.close });
+        if (isLast) (main as unknown as ISeriesApi<'Candlestick'>).update(asBar(list[idx]) as never);
+        else (main as unknown as ISeriesApi<'Candlestick'>).setData(list.map(asBar) as never);
+      } catch { /* series being rebuilt */ }
+    });
+    return () => unsub();
+  }, [symbol, timeframe, chartType]);
+
+  // History refresh after the tab slept / the socket dropped: rebuild from the server instead of
+  // bridging the gap with flat client-side candles.
+  useEffect(() => {
+    let hiddenAt = 0;
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+      if (hiddenAt && Date.now() - hiddenAt > Math.max(2 * tfToMs(timeframe), 10_000)) {
+        void queryClient.invalidateQueries({ queryKey: ['candles', symbol, timeframe] });
+      }
+      hiddenAt = 0;
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [symbol, timeframe, queryClient]);
+
   // High-performance 120Hz+ live loop with unconditionally stable exponential easing & micro-breathing
   useEffect(() => {
     let lastPerfTime = performance.now();
     let lastTimeUpdate = 0;
-    const pip = /JPY/.test(symbol) ? 0.001 : /BTC|ETH/.test(symbol) ? 0.01 : 0.00001;
+    const pip = /JPY/.test(symbol) ? 0.001 : /BTC|ETH|XAU/.test(symbol) ? 0.01 : 0.00001;
 
     const animate = (timestamp: number) => {
       animFrameRef.current = requestAnimationFrame(animate);
@@ -477,7 +785,8 @@ export function PriceChart() {
       const dt = Math.min(0.08, Math.max(0.001, (timestamp - lastPerfTime) / 1000));
       lastPerfTime = timestamp;
 
-      const now = Date.now();
+      // candle buckets follow the SERVER clock (the same clock that rolls candles and settles trades)
+      const now = serverNow();
       const list = liveCandlesRef.current;
       const chart = chartRef.current;
       const main = mainRef.current;
@@ -515,10 +824,8 @@ export function PriceChart() {
       currentPriceRef.current = currentPrice;
       velocityRef.current = 0;
 
-      // Quotex micro-breathing: subtle sub-pip organic oscillation so the candle head breathes realistically like an electronic matching engine
-      const microTime = timestamp * 0.006;
-      const microJitter = (Math.sin(microTime) * 0.6 + Math.sin(microTime * 2.3) * 0.4) * (pip * 0.08);
-      let curPrice = Number((currentPrice + microJitter).toFixed(/JPY/.test(symbol) ? 3 : /BTC|ETH/.test(symbol) ? 2 : 5));
+      // Only real quotes are drawn — no synthetic jitter: the candle must show exactly the prices the server settles on
+      let curPrice = Number(currentPrice.toFixed(/JPY/.test(symbol) ? 3 : /BTC|ETH|XAU/.test(symbol) ? 2 : 5));
 
       // Hard sanity guard against numerical explosion or NaN
       if (!Number.isFinite(curPrice) || curPrice <= 0 || (lastCandle.close > 0 && Math.abs(curPrice - lastCandle.close) > lastCandle.close * 0.15)) {
@@ -611,9 +918,9 @@ export function PriceChart() {
           openPriceTextRef.current.textContent = fmtPrice(newCandle.open);
         }
       } else {
-        // Active candle breathing: expand high/low wicks and update close smoothly
-        lastCandle.high = Math.max(lastCandle.high, curPrice);
-        lastCandle.low = Math.min(lastCandle.low, curPrice);
+        // Active candle: wicks from the real quote, close eases toward it
+        lastCandle.high = Math.max(lastCandle.high, curPrice, targetPrice);
+        lastCandle.low = Math.min(lastCandle.low, curPrice, targetPrice);
         lastCandle.close = curPrice;
         lastCandle.volume += 0.02;
         activeCandleRef.current = lastCandle;
@@ -697,8 +1004,8 @@ export function PriceChart() {
         }
       } catch { /* noop */ }
 
-      // Throttled time & countdown updates (every 500ms for crisp responsiveness)
-      if (now - lastTimeUpdate >= 500) {
+      // Throttled time & countdown updates (every 250ms for crisp responsiveness)
+      if (now - lastTimeUpdate >= 250) {
         lastTimeUpdate = now;
         setClock(now);
         const secLeft = Math.max(0, Math.ceil((bucket + tfMs - now) / 1000));
@@ -763,10 +1070,10 @@ export function PriceChart() {
     } catch { price = null; }
     if (price === null || !Number.isFinite(price)) return;
     const t = p.time as number;
-    if (tool === 'trend') {
+    if (tool === 'trend' || tool === 'fibonacci') {
       if (!pending) setPending({ t, p: price });
       else {
-        setDrawings((d) => [...d, { id: `d${Date.now()}`, type: 'trend', t1: pending.t, p1: pending.p, t2: t, p2: price as number }]);
+        setDrawings((d) => [...d, { id: `d${Date.now()}`, type: tool, t1: pending.t, p1: pending.p, t2: t, p2: price as number }]);
         setPending(null);
       }
     } else {
@@ -786,7 +1093,7 @@ export function PriceChart() {
       try {
         const y1 = (main as ISeriesApi<'Line'>).priceToCoordinate(d.p1);
         if (y1 === null) continue;
-        if (d.type === 'trend' && d.t2 !== undefined && d.p2 !== undefined) {
+        if ((d.type === 'trend' || d.type === 'fibonacci') && d.t2 !== undefined && d.p2 !== undefined) {
           const x1 = chart.timeScale().timeToCoordinate(d.t1 as Time);
           const x2 = chart.timeScale().timeToCoordinate(d.t2 as Time);
           const y2 = (main as ISeriesApi<'Line'>).priceToCoordinate(d.p2);
@@ -801,7 +1108,7 @@ export function PriceChart() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drawings, rev]);
 
-  // Trade overlay geometry: beginning of trade line, end of trade line, entry line, countdown chip
+  // Trade overlay geometry: beginning of trade line, end of trade line, entry line, dynamic ITM/OTM, countdown chip
   const tradeGeo = useMemo(() => {
     void rev; void clock;
     const chart = chartRef.current;
@@ -810,36 +1117,78 @@ export function PriceChart() {
     const W = elRef.current.clientWidth;
     const H = elRef.current.clientHeight;
     const ts = chart.timeScale();
-    const out: Array<{ id: string; x1: number; x2: number; y: number | null; t: OptionTrade; left: number; pv: string }> = [];
     const priceScaleW = 58;
 
     const list = liveCandlesRef.current;
     const lastT = list.length ? list[list.length - 1].openTime / 1000 : null;
     const lastX = lastT !== null ? ts.timeToCoordinate(lastT as Time) : null;
     const tfSec = tfToMs(timeframe) / 1000;
-    const bw = lastX !== null && list.length >= 2 ? Math.max(3, (lastX - (ts.timeToCoordinate((list[list.length - 2].openTime / 1000) as Time) ?? lastX - 10))) : 10;
-    const project = (sec: number): number | null => {
-      if (lastX === null || lastT === null) return null;
-      return lastX + ((sec - lastT) / tfSec) * bw;
-    };
+    const bw = lastX !== null && list.length >= 2
+      ? Math.max(4, (lastX - (ts.timeToCoordinate((list[list.length - 2].openTime / 1000) as Time) ?? (lastX - 14))))
+      : 14;
+
+    const curPrice = currentPriceRef.current ?? (list.length ? list[list.length - 1].close : 0);
+    const curY = curPrice > 0 ? (main as unknown as ISeriesApi<'Line'>).priceToCoordinate(curPrice) : null;
+    const currentX = lastX !== null ? lastX : (W - priceScaleW) * 0.78;
+
+    const out: Array<{
+      id: string;
+      x1: number;
+      x2: number;
+      currentX: number;
+      y: number | null;
+      curY: number | null;
+      t: OptionTrade;
+      left: number;
+      pv: OptionStatus;
+      isWinning: boolean;
+      isTie: boolean;
+      expectedPayout: number;
+      netProfit: number;
+    }> = [];
 
     for (const t of symTrades) {
       try {
-        const bucket = (ms: number) => Math.floor(ms / 1000);
-        const openSec = bucket(new Date(t.openedAt).getTime());
-        const expireSec = bucket(new Date(t.expiresAt).getTime());
-        const x1 = ts.timeToCoordinate(openSec as Time) ?? project(openSec);
-        const x2 = ts.timeToCoordinate(expireSec as Time) ?? project(expireSec);
-        const y = (main as ISeriesApi<'Line'>).priceToCoordinate(t.entryPrice);
-        if (x1 === null || x2 === null) continue;
+        const openSec = Math.floor(new Date(t.openedAt).getTime() / 1000);
+        const expireSec = Math.floor(new Date(t.expiresAt).getTime() / 1000);
+
+        // Precise intra-candle projection for beginning of trade
+        const openCandleSec = Math.floor(openSec / tfSec) * tfSec;
+        const openCandleX = ts.timeToCoordinate(openCandleSec as Time);
+        const x1Raw = openCandleX !== null
+          ? openCandleX + ((openSec - openCandleSec) / tfSec) * bw
+          : (lastX !== null && lastT !== null ? lastX + ((openSec - lastT) / tfSec) * bw : null);
+
+        // Precise intra-candle projection for expiration time
+        const expireCandleSec = Math.floor(expireSec / tfSec) * tfSec;
+        const expireCandleX = ts.timeToCoordinate(expireCandleSec as Time);
+        const x2Raw = expireCandleX !== null
+          ? expireCandleX + ((expireSec - expireCandleSec) / tfSec) * bw
+          : (lastX !== null && lastT !== null ? lastX + ((expireSec - lastT) / tfSec) * bw : null);
+
+        if (x1Raw === null || x2Raw === null) continue;
+
+        const y = (main as unknown as ISeriesApi<'Line'>).priceToCoordinate(t.entryPrice);
+        const pv = previewOutcome(t, curPrice > 0 ? curPrice : undefined);
+        const isWinning = pv === 'WON';
+        const isTie = pv === 'TIE';
+        const expectedPayout = payoutFor(t.stake, t.payoutPct);
+        const netProfit = expectedPayout - t.stake;
+
         out.push({
           id: t.id,
-          x1: Math.min(Math.max(0, x1), W - priceScaleW),
-          x2: Math.min(Math.max(0, x2), W - priceScaleW),
+          x1: Math.min(Math.max(0, x1Raw), W - priceScaleW),
+          x2: Math.min(Math.max(x1Raw + 10, x2Raw), W - priceScaleW),
+          currentX,
           y,
+          curY,
           t,
           left: secondsLeft(t.expiresAt, clock),
-          pv: previewOutcome(t, currentPriceRef.current ?? undefined),
+          pv,
+          isWinning,
+          isTie,
+          expectedPayout,
+          netProfit,
         });
       } catch { /* skip */ }
     }
@@ -858,7 +1207,7 @@ export function PriceChart() {
     const list = liveCandlesRef.current;
     if (!list.length) return null;
 
-    const nowSec = Math.floor(Date.now() / 1000);
+    const nowSec = Math.floor(serverNow() / 1000);
     const durSec = Number(localStorage.getItem('ax_opt_dur') ?? 60);
     const endSec = nowSec + durSec;
 
@@ -973,27 +1322,66 @@ export function PriceChart() {
         </button>
       </div>
 
-      {/* Quotex Left Edge Sentiment Bar */}
-      <div className="absolute left-2.5 top-1/2 -translate-y-1/2 z-10 flex flex-col items-center bg-[#171c26]/90 border border-white/10 rounded-md py-1.5 px-1 shadow-lg pointer-events-none select-none">
-        <span className="text-[9.5px] font-black text-[#00c076] leading-none mb-1">59%</span>
-        <div className="w-1.5 h-28 rounded-full bg-base-800 flex flex-col overflow-hidden">
-          <div className="w-full bg-[#00c076]" style={{ height: '59%' }} />
-          <div className="w-full bg-[#ff5447]" style={{ height: '41%' }} />
+      {/* Quotex Left Edge Sentiment Bar (Dynamic Crowd Sentiment) */}
+      <div
+        className="absolute left-2.5 top-1/2 -translate-y-1/2 z-10 flex flex-col items-center bg-[#171c26]/90 border border-white/10 rounded-md py-1.5 px-1 shadow-lg pointer-events-auto select-none group cursor-pointer transition-transform hover:scale-105"
+        title={`Crowd Sentiment: ${sentiment.up}% Call (Green) / ${sentiment.down}% Put (Red)`}
+      >
+        <span className="text-[9.5px] font-black text-[#00c076] leading-none mb-1 font-mono transition-all duration-300">
+          {sentiment.up}%
+        </span>
+        <div className="w-1.5 h-28 rounded-full bg-base-800 flex flex-col overflow-hidden relative">
+          <div
+            className="w-full bg-[#00c076] transition-all duration-500 ease-out"
+            style={{ height: `${sentiment.up}%` }}
+          />
+          <div
+            className="w-full bg-[#ff5447] transition-all duration-500 ease-out"
+            style={{ height: `${sentiment.down}%` }}
+          />
         </div>
-        <span className="text-[9.5px] font-black text-[#ff5447] leading-none mt-1">41%</span>
+        <span className="text-[9.5px] font-black text-[#ff5447] leading-none mt-1 font-mono transition-all duration-300">
+          {sentiment.down}%
+        </span>
       </div>
 
       {/* Drawing Overlay */}
       <svg className="absolute inset-0 w-full h-full z-[5]" onClick={onOverlayClick} style={{ pointerEvents: tool === 'select' ? 'none' : 'auto' }}>
-        {geo.map((g) => (
-          <g key={g.id}>
-            <line x1={g.x1} y1={g.y1} x2={g.x2} y2={g.y2} stroke={drawColor(g.type)} strokeWidth={1.5} strokeDasharray={g.type === 'trend' ? undefined : '5 3'} />
-            {g.type === 'trend' && (<><circle cx={g.x1} cy={g.y1} r={3} fill={drawColor(g.type)} /><circle cx={g.x2} cy={g.y2} r={3} fill={drawColor(g.type)} /></>)}
-            {(g.type === 'support' || g.type === 'resistance') && (
-              <text x={8} y={g.y1 - 5} fill={drawColor(g.type)} fontSize={10} fontWeight={700}>{g.type === 'support' ? 'S' : 'R'}</text>
-            )}
-          </g>
-        ))}
+        {geo.map((g) => {
+          if (g.type === 'fibonacci') {
+            const dy = g.y2 - g.y1;
+            const xLeft = Math.min(g.x1, g.x2);
+            const xRight = Math.max(g.x1, g.x2, (elRef.current?.clientWidth ?? 800) - 58);
+            return (
+              <g key={g.id}>
+                {/* Diagonal anchor line */}
+                <line x1={g.x1} y1={g.y1} x2={g.x2} y2={g.y2} stroke="#38bdf8" strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
+                <circle cx={g.x1} cy={g.y1} r={3} fill="#38bdf8" />
+                <circle cx={g.x2} cy={g.y2} r={3} fill="#38bdf8" />
+                {FIB_LEVELS.map((fib) => {
+                  const y = g.y1 + dy * fib.pct;
+                  return (
+                    <g key={fib.pct}>
+                      <line x1={xLeft} y1={y} x2={xRight} y2={y} stroke={fib.color} strokeWidth={1.2} strokeDasharray="4 2" opacity={0.85} />
+                      <text x={xLeft + 4} y={y - 3} fill={fib.color} fontSize={9.5} fontWeight={700} fontFamily="JetBrains Mono, monospace">
+                        {fib.label}
+                      </text>
+                    </g>
+                  );
+                })}
+              </g>
+            );
+          }
+          return (
+            <g key={g.id}>
+              <line x1={g.x1} y1={g.y1} x2={g.x2} y2={g.y2} stroke={drawColor(g.type)} strokeWidth={1.5} strokeDasharray={g.type === 'trend' ? undefined : '5 3'} />
+              {g.type === 'trend' && (<><circle cx={g.x1} cy={g.y1} r={3} fill={drawColor(g.type)} /><circle cx={g.x2} cy={g.y2} r={3} fill={drawColor(g.type)} /></>)}
+              {(g.type === 'support' || g.type === 'resistance') && (
+                <text x={8} y={g.y1 - 5} fill={drawColor(g.type)} fontSize={10} fontWeight={700}>{g.type === 'support' ? 'S' : 'R'}</text>
+              )}
+            </g>
+          );
+        })}
       </svg>
 
       {/* Projected Trade Window (When no trade is currently open) */}
@@ -1006,61 +1394,276 @@ export function PriceChart() {
               <g>
                 <rect x={Math.min(x1, x2)} y={0} width={Math.abs(x2 - x1)} height={H} fill="#ffffff" opacity={0.02} />
                 {/* Beginning of trade line */}
-                <line x1={x1} y1={0} x2={x1} y2={H} stroke="#ffffff" strokeWidth={1} strokeDasharray="3 3" opacity={0.5} />
-                <text x={x1 - 4} y={48} textAnchor="end" fill="#cbd5e1" fontSize={9.5} fontFamily="Inter, system-ui" fontWeight={600} opacity={0.85}>
+                <line x1={x1} y1={0} x2={x1} y2={H} stroke="#ffffff" strokeWidth={1} strokeDasharray="3 3" opacity={0.4} />
+                <text x={x1 - 4} y={32} textAnchor="end" fill="#cbd5e1" fontSize={9.5} fontFamily="Inter, system-ui" fontWeight={600} opacity={0.85}>
                   Beginning of trade ▸
                 </text>
                 {/* End of trade line */}
-                <line x1={x2} y1={0} x2={x2} y2={H} stroke="#ffffff" strokeWidth={1} strokeDasharray="2 2" opacity={0.5} />
-                <text x={x2 + 4} y={62} fill="#cbd5e1" fontSize={9.5} fontFamily="Inter, system-ui" fontWeight={600} opacity={0.85}>
-                  ◂ End of trade
-                </text>
+                <line x1={x2} y1={0} x2={x2} y2={H} stroke="#ff5447" strokeWidth={1.25} strokeDasharray="3 3" opacity={0.7} />
+                <g transform={`translate(${Math.max(10, x2 - 38)}, 14)`}>
+                  <rect width={76} height={18} rx={4} fill="#ea4d4d" opacity={0.9} />
+                  <text x={38} y={12.5} textAnchor="middle" fill="#ffffff" fontSize={9.5} fontWeight={900} fontFamily="Inter, system-ui" letterSpacing="0.05em">
+                    EXPIRATION
+                  </text>
+                </g>
               </g>
             );
           })()}
         </svg>
       )}
 
-      {/* Active Fixed-Time Trades Overlay */}
+      {/* Active Fixed-Time Trades Overlay (Quotex Authentic Platform Standard) */}
       {tradeGeo.length > 0 && (
-        <svg className="absolute inset-0 w-full h-full z-[6] pointer-events-none">
+        <svg className="absolute inset-0 w-full h-full z-[6] pointer-events-none overflow-hidden">
+          <defs>
+            <filter id="qxTradeGlowGreen" x="-20%" y="-40%" width="140%" height="180%">
+              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#00c076" floodOpacity="0.75" />
+            </filter>
+            <filter id="qxTradeGlowRed" x="-20%" y="-40%" width="140%" height="180%">
+              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#ff5447" floodOpacity="0.75" />
+            </filter>
+            <filter id="qxPillShadow" x="-20%" y="-20%" width="140%" height="140%">
+              <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="#000000" floodOpacity="0.65" />
+            </filter>
+            <linearGradient id="qxItmWinGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#00c076" stopOpacity="0.25" />
+              <stop offset="100%" stopColor="#00c076" stopOpacity="0.04" />
+            </linearGradient>
+            <linearGradient id="qxOtmLossGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#ff5447" stopOpacity="0.25" />
+              <stop offset="100%" stopColor="#ff5447" stopOpacity="0.04" />
+            </linearGradient>
+          </defs>
+
           {tradeGeo.map((g) => {
-            const col = g.pv === 'WON' ? '#00c076' : g.pv === 'LOST' ? '#ff5447' : '#94a3b8';
+            const H = elRef.current?.clientHeight ?? 500;
+            const W = elRef.current?.clientWidth ?? 800;
+            const priceScaleW = 58;
             const dirCol = g.t.direction === 'UP' ? '#00c076' : '#ff5447';
-            const H = elRef.current?.clientHeight ?? 0;
+            const outcomeCol = g.isWinning ? '#00c076' : g.isTie ? '#94a3b8' : '#ff5447';
+            const zoneLeft = Math.min(g.x1, g.currentX);
+            const zoneWidth = Math.max(2, Math.abs(g.currentX - g.x1));
+
             return (
               <g key={g.id}>
-                <rect x={Math.min(g.x1, g.x2)} y={0} width={Math.abs(g.x2 - g.x1)} height={H} fill={col} opacity={0.07} />
-                {/* Beginning of trade marker */}
-                <line x1={g.x1} y1={0} x2={g.x1} y2={H} stroke="#ffffff" strokeWidth={1} strokeDasharray="4 3" opacity={0.7} />
-                <text x={g.x1 - 4} y={48} textAnchor="end" fill="#e2e8f0" fontSize={9.5} fontFamily="Inter, system-ui" fontWeight={600}>
+                {/* 1. Subtle full-height trade corridor */}
+                <rect
+                  x={Math.min(g.x1, g.x2)}
+                  y={0}
+                  width={Math.max(2, Math.abs(g.x2 - g.x1))}
+                  height={H}
+                  fill={outcomeCol}
+                  opacity={0.035}
+                />
+
+                {/* 2. Quotex Dynamic ITM / OTM Shaded Zone between entry strike and live price */}
+                {g.y !== null && g.curY !== null && (
+                  <rect
+                    x={zoneLeft}
+                    y={Math.min(g.y, g.curY)}
+                    width={zoneWidth}
+                    height={Math.max(2, Math.abs(g.y - g.curY))}
+                    fill={g.isWinning ? 'url(#qxItmWinGrad)' : 'url(#qxOtmLossGrad)'}
+                    stroke={outcomeCol}
+                    strokeWidth={1}
+                    strokeOpacity={0.25}
+                    strokeDasharray="3 2"
+                  />
+                )}
+
+                {/* 3. Beginning of Trade Marker (Entry timestamp) */}
+                <line
+                  x1={g.x1}
+                  y1={0}
+                  x2={g.x1}
+                  y2={H}
+                  stroke="rgba(255, 255, 255, 0.4)"
+                  strokeWidth={1}
+                  strokeDasharray="4 3"
+                />
+                <text
+                  x={g.x1 - 5}
+                  y={32}
+                  textAnchor="end"
+                  fill="#94a3b8"
+                  fontSize={9.5}
+                  fontFamily="Inter, system-ui"
+                  fontWeight={600}
+                >
                   Beginning of trade ▸
                 </text>
-                {/* End of trade marker */}
-                <line x1={g.x2} y1={0} x2={g.x2} y2={H} stroke="#ffffff" strokeWidth={1} strokeDasharray="2 3" opacity={0.7} />
-                <text x={g.x2 + 4} y={62} fill="#e2e8f0" fontSize={9.5} fontFamily="Inter, system-ui" fontWeight={600}>
-                  ◂ End of trade
-                </text>
-                {/* Entry price line + direction chip */}
-                {g.y !== null && (
-                  <>
-                    <line x1={g.x1} y1={g.y} x2={g.x2} y2={g.y} stroke={dirCol} strokeWidth={1.75} strokeDasharray="5 3" />
-                    <circle cx={g.x1} cy={g.y} r={4} fill={dirCol} />
-                    <g transform={`translate(${g.x1 + 6}, ${g.y - 10})`}>
-                      <rect width={94} height={20} rx={4} fill="#121620" stroke={dirCol} strokeWidth={1.25} />
-                      <text x={7} y={13.5} fill={dirCol} fontSize={10} fontWeight={800} fontFamily="JetBrains Mono, monospace">
-                        {g.t.direction === 'UP' ? '▲' : '▼'} {fmtPrice(g.t.entryPrice)}
-                      </text>
-                    </g>
-                  </>
-                )}
-                {/* Live trade countdown chip */}
-                <g transform={`translate(${Math.min(Math.max(g.x2 - 32, 2), (elRef.current?.clientWidth ?? 0) - 58 - 66)}, ${(g.y !== null ? g.y : H * 0.45) + 14})`}>
-                  <rect width={64} height={20} rx={10} fill={col} opacity={0.95} />
-                  <text x={32} y={14} textAnchor="middle" fill="#ffffff" fontSize={10.5} fontWeight={800} fontFamily="JetBrains Mono, monospace">
-                    {fmtHMS(g.left)}
+
+                {/* 4. Expiration / Settlement Vertical Line at x2 with Finish Flag */}
+                <line
+                  x1={g.x2}
+                  y1={0}
+                  x2={g.x2}
+                  y2={H}
+                  stroke="#ff5447"
+                  strokeWidth={1.5}
+                  strokeDasharray="3 3"
+                  strokeOpacity={0.85}
+                />
+                <g transform={`translate(${Math.max(10, g.x2 - 38)}, 14)`} filter="url(#qxPillShadow)">
+                  <rect width={76} height={18} rx={4} fill="#ea4d4d" />
+                  <text
+                    x={38}
+                    y={12.5}
+                    textAnchor="middle"
+                    fill="#ffffff"
+                    fontSize={9.5}
+                    fontWeight={900}
+                    fontFamily="Inter, system-ui"
+                    letterSpacing="0.05em"
+                  >
+                    EXPIRATION
                   </text>
                 </g>
+
+                {/* 5. Horizontal Dashed Strike Price Line extending from x1 to x2 */}
+                {g.y !== null && (
+                  <>
+                    {/* Glowing shadow line for high contrast */}
+                    <line
+                      x1={g.x1}
+                      y1={g.y}
+                      x2={g.x2}
+                      y2={g.y}
+                      stroke={dirCol}
+                      strokeWidth={3}
+                      strokeOpacity={0.35}
+                      filter={g.t.direction === 'UP' ? 'url(#qxTradeGlowGreen)' : 'url(#qxTradeGlowRed)'}
+                    />
+                    {/* Main high-visibility dashed line */}
+                    <line
+                      x1={g.x1}
+                      y1={g.y}
+                      x2={g.x2}
+                      y2={g.y}
+                      stroke={dirCol}
+                      strokeWidth={1.8}
+                      strokeDasharray="6 3"
+                    />
+
+                    {/* 6. Quotex Trade Entry Pin & Stake Badge at (g.x1, g.y) */}
+                    <circle
+                      cx={g.x1}
+                      cy={g.y}
+                      r={10}
+                      fill="#121620"
+                      stroke={dirCol}
+                      strokeWidth={2}
+                      filter="url(#qxPillShadow)"
+                    />
+                    <text
+                      x={g.x1}
+                      y={g.y + 3.5}
+                      textAnchor="middle"
+                      fill={dirCol}
+                      fontSize={10.5}
+                      fontWeight={900}
+                      fontFamily="Inter, system-ui"
+                    >
+                      {g.t.direction === 'UP' ? '▲' : '▼'}
+                    </text>
+
+                    {/* Entry Stake & Strike Price Capsule */}
+                    <g
+                      transform={`translate(${g.x1 + 13}, ${Math.max(22, g.y - 14)})`}
+                      filter="url(#qxPillShadow)"
+                    >
+                      <rect
+                        width={118}
+                        height={26}
+                        rx={5}
+                        fill="#121620"
+                        stroke={dirCol}
+                        strokeWidth={1.25}
+                      />
+                      <rect width={4} height={26} rx={2} fill={dirCol} />
+                      <text
+                        x={10}
+                        y={13}
+                        fill="#ffffff"
+                        fontSize={10.5}
+                        fontWeight={800}
+                        fontFamily="Inter, system-ui"
+                      >
+                        {fmtMoney(g.t.stake)}
+                      </text>
+                      <text
+                        x={10}
+                        y={22}
+                        fill="#94a3b8"
+                        fontSize={8.5}
+                        fontWeight={600}
+                        fontFamily="JetBrains Mono, monospace"
+                      >
+                        @ {fmtPrice(g.t.entryPrice)}
+                      </text>
+                    </g>
+
+                    {/* 7. Floating Live Dual-Capsule Badge: Real-time Outcome + Countdown */}
+                    {(() => {
+                      const badgeW = 142;
+                      const badgeH = 26;
+                      const badgeX = Math.min(
+                        Math.max(g.x2 - badgeW + 8, g.x1 + 128),
+                        W - priceScaleW - badgeW - 6
+                      );
+                      const badgeY = Math.min(Math.max(g.y - 13, 38), H - 42);
+                      const isWinning = g.isWinning;
+                      const isTie = g.isTie;
+
+                      return (
+                        <g transform={`translate(${badgeX}, ${badgeY})`} filter="url(#qxPillShadow)">
+                          {/* Unified capsule border */}
+                          <rect
+                            width={badgeW}
+                            height={badgeH}
+                            rx={13}
+                            fill="#121620"
+                            stroke={isWinning ? '#00c076' : isTie ? '#64748b' : '#ff5447'}
+                            strokeWidth={1.5}
+                          />
+                          {/* Left half: Outcome pill */}
+                          <rect
+                            x={2}
+                            y={2}
+                            width={72}
+                            height={badgeH - 4}
+                            rx={11}
+                            fill={isWinning ? '#00c076' : isTie ? '#334155' : 'rgba(255, 84, 71, 0.22)'}
+                          />
+                          <text
+                            x={38}
+                            y={16.5}
+                            textAnchor="middle"
+                            fill={isWinning ? '#ffffff' : isTie ? '#e2e8f0' : '#ff5447'}
+                            fontSize={10}
+                            fontWeight={800}
+                            fontFamily="JetBrains Mono, monospace"
+                          >
+                            {isWinning ? `+${fmtMoney(g.expectedPayout)}` : isTie ? fmtMoney(g.t.stake) : '$0.00'}
+                          </text>
+
+                          {/* Right half: Countdown Timer */}
+                          <text
+                            x={106}
+                            y={16.5}
+                            textAnchor="middle"
+                            fill="#ffffff"
+                            fontSize={11}
+                            fontWeight={700}
+                            fontFamily="JetBrains Mono, monospace"
+                          >
+                            {fmtTradeCountdown(g.left)}
+                          </text>
+                        </g>
+                      );
+                    })()}
+                  </>
+                )}
               </g>
             );
           })}
@@ -1166,6 +1769,7 @@ export function PriceChart() {
               ['hline', '―', 'H-Line'],
               ['support', 'S', 'Support'],
               ['resistance', 'R', 'Resistance'],
+              ['fibonacci', '📐', 'Fibonacci'],
             ].map(([v, glyph, title]) => (
               <button
                 key={v}
@@ -1247,16 +1851,24 @@ export function PriceChart() {
             <span>🧭</span>
           </button>
           {showIndMenu && (
-            <div className="absolute left-0 bottom-9 w-48 bg-[#171c26] border border-white/15 rounded-lg shadow-2xl p-2 z-30">
+            <div className="absolute left-0 bottom-9 w-52 bg-[#171c26] border border-white/15 rounded-lg shadow-2xl p-2 z-30">
               <div className="text-[10px] uppercase font-bold text-slate-400 px-1 pb-1">Overlays</div>
-              {[['vol', 'Volume'], ['sma20', 'SMA 20'], ['sma50', 'SMA 50'], ['ema20', 'EMA 20'], ['bb', 'Bollinger (20, 2)']].map(([k, label]) => (
+              {[
+                ['vol', 'Volume'],
+                ['sma20', 'SMA 20'],
+                ['sma50', 'SMA 50'],
+                ['ema20', 'EMA 20'],
+                ['bb', 'Bollinger (20, 2)'],
+                ['sar', 'Parabolic SAR (0.02, 0.2)'],
+                ['supertrend', 'Supertrend (10, 3)'],
+              ].map(([k, label]) => (
                 <label key={k} className="flex items-center gap-2 px-1.5 py-1 text-xs rounded hover:bg-white/[0.06] cursor-pointer text-slate-200">
                   <input type="checkbox" className="ax-check" checked={!!inds[k as keyof IndState]} onChange={() => setInds({ ...inds, [k]: !inds[k as keyof IndState] })} />
                   <span>{label}</span>
                 </label>
               ))}
               <div className="text-[10px] uppercase font-bold text-slate-400 px-1 pt-2 pb-1">Oscillator</div>
-              {([['none', 'None'], ['rsi', 'RSI (14)'], ['macd', 'MACD (12, 26, 9)']] as Array<[IndState['osc'], string]>).map(([k, label]) => (
+              {([['none', 'None'], ['rsi', 'RSI (14)'], ['macd', 'MACD (12, 26, 9)'], ['stoch', 'Stochastic (14, 3, 3)']] as Array<[IndState['osc'], string]>).map(([k, label]) => (
                 <label key={k} className="flex items-center gap-2 px-1.5 py-1 text-xs rounded hover:bg-white/[0.06] cursor-pointer text-slate-200">
                   <input type="radio" name="osc" className="ax-check" checked={inds.osc === k} onChange={() => setInds({ ...inds, osc: k })} />
                   <span>{label}</span>
@@ -1288,7 +1900,7 @@ export function PriceChart() {
 
       {tool !== 'select' && (
         <div className="absolute top-12 left-1/2 -translate-x-1/2 z-20 text-[11px] bg-[#171c26]/95 border border-white/15 text-slate-200 rounded px-3 py-1.5 whitespace-nowrap shadow-pop">
-          {tool === 'trend' ? (pending ? 'Click second point · ' : 'Click first point · ') : `Click chart to place ${tool === 'support' ? 'support' : tool === 'resistance' ? 'resistance' : 'line'} · `}
+          {tool === 'trend' || tool === 'fibonacci' ? (pending ? 'Click second point · ' : 'Click first point · ') : `Click chart to place ${tool === 'support' ? 'support' : tool === 'resistance' ? 'resistance' : 'line'} · `}
           <button className="underline text-white font-bold ml-1" onClick={() => { setTool('select'); setPending(null); }}>done</button>
         </div>
       )}

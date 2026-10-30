@@ -59,7 +59,6 @@ export function evaluateRisk(ctx: RiskContext, rules: RiskRuleSet): void {
   if (!rules.tradingEnabled) throw Err.tradingDisabled();
   if (ctx.accountStatus !== 'ACTIVE') throw Err.accountSuspended();
   if (!ctx.assetEnabled) throw Err.assetDisabled();
-  if (ctx.accountType === 'LIVE') throw Err.liveDisabled();
   if (!Number.isFinite(ctx.amount) || ctx.amount <= 0) throw Err.invalidAmount();
   if (ctx.amount < rules.minOrderAmount) throw Err.invalidAmount();
   if (ctx.amount > rules.maxOrderAmount) throw Err.maxOrderSize();

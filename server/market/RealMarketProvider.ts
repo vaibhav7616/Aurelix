@@ -40,6 +40,7 @@ const TF_SECONDS: Record<string, number> = {
   '15s': 15,
   '30s': 30,
   '1m': 60,
+  '2m': 120,
   '5m': 300,
   '15m': 900,
   '30m': 1800,
@@ -354,10 +355,11 @@ export class RealMarketProvider implements MarketDataProvider {
   private tickForex() {
     const now = Date.now();
     for (const s of this.states.values()) {
-      if (!s.isForex) continue;
+      if (!s.isForex && this.ws && this.ws.readyState === WebSocket.OPEN) continue;
       // Micro-jitter: 0.1 pip organic tick movement
       const jitter = (Math.random() - 0.5) * s.pip * 0.8;
-      const newPrice = Number((s.price + jitter).toFixed(s.symbol === 'USD/JPY' ? 3 : 5));
+      const decimals = /JPY/.test(s.symbol) ? 3 : /BTC|ETH|SOL|BNB|XAU/.test(s.symbol) ? 2 : 5;
+      const newPrice = Number((s.price + jitter).toFixed(decimals));
       s.price = newPrice;
       s.bid = newPrice - s.pip;
       s.ask = newPrice + s.pip;

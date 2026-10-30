@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { get, post } from '../../lib/api';
+import { get, post, apiError } from '../../lib/api';
 import { useTerminal } from '../../stores/terminalStore';
 import { useAuth } from '../../stores/authStore';
 import { useUI } from '../../stores/uiStore';
@@ -118,9 +118,10 @@ export function WalletPage() {
       await post('/api/v1/wallet/deposit', {
         accountId: active.id,
         amount: val,
-        memo: 'Demo account balance top-up',
+        currency: 'USD',
+        memo: active.accountType === 'LIVE' ? 'Real Live Account Deposit' : 'Demo Practice Balance Top-Up',
       });
-      push('ok', `Successfully added ${fmtMoney(val)} to your ${active.accountType} account.`);
+      push('ok', `Successfully credited ${fmtMoney(val)} to your ${active.accountType === 'LIVE' ? 'Live Real' : 'Demo Practice'} account.`);
       qc.invalidateQueries({ queryKey: ['accounts'] });
       qc.invalidateQueries({ queryKey: ['wallet-txs'] });
     } catch {
@@ -130,59 +131,129 @@ export function WalletPage() {
     }
   };
 
+  const handleResetDemo = async () => {
+    if (!active || active.accountType !== 'DEMO') return;
+    setBusy(true);
+    try {
+      await post(`/api/v1/accounts/${active.id}/reset-demo`);
+      push('ok', 'Demo practice balance successfully reset to $10,000.00!');
+      qc.invalidateQueries({ queryKey: ['accounts'] });
+      qc.invalidateQueries({ queryKey: ['wallet-txs'] });
+    } catch (err) {
+      push('err', apiError(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const isLive = active?.accountType === 'LIVE';
+
   return (
     <div className="p-4 md:p-6 max-w-5xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-xl font-bold text-white tracking-tight">Wallet & Balances</h1>
-        <p className="text-xs text-mute mt-0.5">Manage your practice and live balances for fixed-time trading</p>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-bold text-white tracking-tight">Wallet & Balances</h1>
+          <p className="text-xs text-mute mt-0.5">Manage your real live money and practice demo funds for binary options trading</p>
+        </div>
+
+        {/* Account Switcher Tabs */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          {accounts?.map((acc) => {
+            const accIsLive = acc.accountType === 'LIVE';
+            const isSelected = acc.id === active?.id;
+            return (
+              <button
+                key={acc.id}
+                onClick={() => setAccountId(acc.id)}
+                className={clsx(
+                  'px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2.5 border select-none',
+                  isSelected
+                    ? accIsLive
+                      ? 'bg-[#00c076]/15 border-[#00c076]/60 text-white shadow-sm'
+                      : 'bg-accent-500/15 border-accent-500/60 text-white shadow-sm'
+                    : 'bg-base-900 border-line text-mute hover:text-white hover:bg-base-800'
+                )}
+              >
+                <span
+                  className={clsx(
+                    'w-2 h-2 rounded-full shrink-0',
+                    accIsLive ? 'bg-[#00c076] shadow-[0_0_6px_rgba(0,192,118,0.7)]' : 'bg-accent-400'
+                  )}
+                />
+                <div className="text-left">
+                  <div className="text-[9px] uppercase font-bold text-mute">
+                    {accIsLive ? 'Live Real' : 'Demo Practice'}
+                  </div>
+                  <div className={clsx('text-xs font-mono font-black', accIsLive ? 'text-[#00c076]' : 'text-accent-300')}>
+                    {fmtMoney(acc.balance)}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {accLoading ? (
         <TableSkeleton rows={3} />
       ) : (
         <div className="grid md:grid-cols-2 gap-4">
-          {/* Account Card */}
-          <div className="bg-base-900 border border-line rounded-xl p-5 space-y-4">
+          {/* Active Account Card */}
+          <div className={clsx('bg-base-900 border rounded-xl p-5 space-y-4', isLive ? 'border-[#00c076]/40' : 'border-line')}>
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold uppercase text-accent-300 tracking-wider">
-                {active?.accountType === 'DEMO' ? 'Demo Practice Account' : 'Live Trading Account'}
+              <span className={clsx('text-xs font-bold uppercase tracking-wider', isLive ? 'text-[#00c076]' : 'text-accent-300')}>
+                {isLive ? 'Live Real Trading Account' : 'Demo Practice Account'}
               </span>
               <span className="text-[11px] font-mono text-mute">{active?.accountNumber}</span>
             </div>
 
             <div>
               <div className="text-xs text-mute font-medium">Available Balance</div>
-              <div className="text-3xl font-extrabold font-mono text-white mt-1">
+              <div className={clsx('text-3xl font-extrabold font-mono mt-1', isLive ? 'text-[#00c076]' : 'text-white')}>
                 {active ? fmtMoney(active.balance) : '—'}
               </div>
             </div>
 
-            <div className="pt-2 border-t border-line flex items-center gap-2">
-              <div className="text-xs text-mute">Account Type:</div>
-              <span className="text-xs font-bold text-white bg-base-800 px-2.5 py-0.5 rounded border border-line">
-                {active?.accountType}
-              </span>
+            <div className="pt-2 border-t border-line flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-mute">Status:</span>
+                <span className={clsx('text-[10px] font-extrabold px-2 py-0.5 rounded uppercase', isLive ? 'bg-[#00c076]/20 text-[#00c076]' : 'bg-accent-500/20 text-accent-300')}>
+                  {isLive ? 'Ready For Live Trading' : 'Practice Mode'}
+                </span>
+              </div>
+              <span className="text-xs text-mute font-mono">Currency: USD</span>
             </div>
           </div>
 
-          {/* Quick Reload Card */}
+          {/* Quick Deposit / Reload Card */}
           <div className="bg-base-900 border border-line rounded-xl p-5 space-y-4">
-            <div className="text-xs font-bold uppercase text-white tracking-wider">
-              Instant Balance Reload
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-bold uppercase text-white tracking-wider">
+                {isLive ? 'Deposit Funds (Live Account)' : 'Instant Practice Reload'}
+              </div>
+              {isLive ? (
+                <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-[#00c076]/20 text-[#00c076]">LIVE FUNDS</span>
+              ) : (
+                <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-accent-500/20 text-accent-300">VIRTUAL</span>
+              )}
             </div>
             <p className="text-xs text-mute">
-              Reset or top up your practice demo balance with instant virtual funds to test strategies.
+              {isLive
+                ? 'Credit your Live Real Account instantly with simulated payment gateway deposits to place real options trades.'
+                : 'Reset or top up your practice demo balance with virtual funds to test strategies risk-free.'}
             </p>
 
             <div className="flex items-center gap-2">
-              {[500, 1000, 5000, 10000].map((amt) => (
+              {[100, 500, 1000, 5000].map((amt) => (
                 <button
                   key={amt}
                   onClick={() => setTopupAmount(String(amt))}
                   className={clsx(
                     'flex-1 py-1.5 text-xs font-bold rounded-lg border transition font-mono',
                     topupAmount === String(amt)
-                      ? 'bg-[#007aff] border-[#007aff] text-white'
+                      ? isLive
+                        ? 'bg-[#00c076] border-[#00c076] text-base-950 font-black'
+                        : 'bg-[#007aff] border-[#007aff] text-white'
                       : 'bg-base-800 border-line text-fog hover:text-white'
                   )}
                 >
@@ -191,13 +262,30 @@ export function WalletPage() {
               ))}
             </div>
 
-            <button
-              onClick={handleDeposit}
-              disabled={busy || !active}
-              className="w-full h-10 rounded-lg bg-[#00c076] hover:bg-[#00d684] text-white font-bold text-xs flex items-center justify-center transition shadow"
-            >
-              {busy ? 'Processing…' : `Top Up +$${topupAmount} (Instant)`}
-            </button>
+            <div className="space-y-2">
+              <button
+                onClick={handleDeposit}
+                disabled={busy || !active}
+                className={clsx(
+                  'w-full h-10 rounded-lg text-white font-bold text-xs flex items-center justify-center transition shadow active:scale-[0.98]',
+                  isLive
+                    ? 'bg-[#00c076] hover:bg-[#00d684] text-base-950 font-black'
+                    : 'bg-[#007aff] hover:bg-[#208eff]'
+                )}
+              >
+                {busy ? 'Processing…' : isLive ? `Deposit +$${topupAmount} to Live Account` : `Top Up Demo +$${topupAmount}`}
+              </button>
+
+              {!isLive && (
+                <button
+                  onClick={handleResetDemo}
+                  disabled={busy || !active}
+                  className="w-full h-8 rounded-lg bg-base-800 hover:bg-base-750 text-fog hover:text-white font-bold text-xs flex items-center justify-center gap-1.5 border border-line transition active:scale-95"
+                >
+                  <span>🔄 Reset Practice Balance to $10,000.00</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}

@@ -12,9 +12,8 @@ import { orderLimiter } from '../middleware/rateLimit';
 import { Err } from '../utils/errors';
 
 const r = Router();
-r.use(requireAuth);
 
-// Product config for the ticket (durations, limits, per-asset payout)
+// Product config for the ticket (durations, limits, per-asset payout) — public
 r.get('/config', ah(async (_req, res) => {
   const assets = await prisma.asset.findMany({ select: { symbol: true, payoutPct: true, minOrder: true, maxOrder: true, enabled: true }, orderBy: { sortOrder: 'asc' } });
   res.json({
@@ -31,6 +30,8 @@ r.get('/config', ah(async (_req, res) => {
     error: null,
   });
 }));
+
+r.use(requireAuth);
 
 // Open a trade: stake debited now, settled server-side at expiry
 r.post('/', orderLimiter, validateBody(openOptionSchema), ah(async (req: AuthedRequest, res) => {

@@ -3,12 +3,12 @@ export const WS_URL = '';
 
 export const DEFAULT_SYMBOLS = [
   'EUR/USD',
+  'GBP/USD',
+  'USD/JPY',
   'BTC/USD',
   'ETH/USD',
-  'GBP/USD',
-  'EUR/JPY',
-  'AUD/USD',
-  'GOLD',
+  'SOL/USD',
+  'XAU/USD',
   'EUR/CHF',
 ];
 

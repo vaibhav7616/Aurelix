@@ -137,25 +137,58 @@ export function AdminTrades() {
 }
 
 export function AdminDeposits() {
+  const qc = useQueryClient();
+  const push = useUI((s) => s.push);
   const { data } = useQuery({
     queryKey: ['admin-deposits'],
     queryFn: () => get<Array<{ id: string; amount: number; currency: string; provider: string; providerRef: string | null; status: string; createdAt: string; user: { email: string } }>>('/api/v1/admin/deposits'),
   });
+
+  const handleApprove = async (id: string) => {
+    try {
+      await post(`/api/v1/admin/deposits/${id}/approve`);
+      push('ok', 'Deposit approved and balance credited to user!');
+      qc.invalidateQueries({ queryKey: ['admin-deposits'] });
+    } catch (e) {
+      push('err', apiError(e));
+    }
+  };
+
+  const handleReject = async (id: string) => {
+    try {
+      await post(`/api/v1/admin/deposits/${id}/reject`, { reason: 'Proof rejected by admin' });
+      push('ok', 'Deposit rejected.');
+      qc.invalidateQueries({ queryKey: ['admin-deposits'] });
+    } catch (e) {
+      push('err', apiError(e));
+    }
+  };
+
   return (
     <div>
       <h1 className="text-lg font-bold tracking-tight">Deposits</h1>
       <div className="ax-panel mt-3 overflow-hidden">
         {!data?.length ? <Empty title="No deposits" /> : (
           <table className="w-full">
-            <thead><tr>{['User', 'Amount', 'Provider', 'Reference', 'Status', 'Date'].map((h) => <th key={h} className="ax-th">{h}</th>)}</tr></thead>
+            <thead><tr>{['User', 'Amount', 'Method', 'Reference / Proof', 'Status', 'Date', 'Action'].map((h) => <th key={h} className="ax-th">{h}</th>)}</tr></thead>
             <tbody>{data.map((d) => (
               <tr key={d.id} className="ax-row">
-                <td className="ax-td text-fog">{d.user.email}</td>
-                <td className="ax-td ax-num font-bold">{fmtMoney(d.amount)} <span className="text-mute text-[10px]">{d.currency}</span></td>
-                <td className="ax-td"><span className="ax-tag">{d.provider} · simulated</span></td>
-                <td className="ax-td font-mono text-[11px] text-mute">{d.providerRef ?? '—'}</td>
+                <td className="ax-td text-fog">{d.user?.email}</td>
+                <td className="ax-td ax-num font-bold text-[#00c076]">{fmtMoney(d.amount)} <span className="text-mute text-[10px]">{d.currency}</span></td>
+                <td className="ax-td"><span className="ax-tag">{d.provider.replace(/_/g, ' ')}</span></td>
+                <td className="ax-td font-mono text-[11px] text-slate-300 max-w-[220px] truncate">{d.providerRef ?? '—'}</td>
                 <td className="ax-td"><span className="ax-tag">{d.status}</span></td>
                 <td className="ax-td text-mute">{fmtTime(d.createdAt)}</td>
+                <td className="ax-td">
+                  {d.status === 'PENDING' ? (
+                    <div className="flex gap-1">
+                      <button onClick={() => handleApprove(d.id)} className="px-2 py-1 rounded bg-[#00c076] hover:bg-[#00d684] text-base-950 font-bold text-xs">Approve</button>
+                      <button onClick={() => handleReject(d.id)} className="px-2 py-1 rounded bg-red-500/20 hover:bg-red-500 text-red-400 hover:text-white font-bold text-xs">Reject</button>
+                    </div>
+                  ) : (
+                    <span className="text-[11px] text-mute">—</span>
+                  )}
+                </td>
               </tr>
             ))}</tbody>
           </table>

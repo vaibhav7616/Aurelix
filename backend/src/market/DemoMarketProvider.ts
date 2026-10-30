@@ -44,7 +44,7 @@ export interface AssetState {
 
 export const TIMEFRAMES: Record<string, number> = {
   '5s': 5_000, '10s': 10_000, '15s': 15_000, '30s': 30_000,
-  '1m': 60_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
+  '1m': 60_000, '2m': 120_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
   '1h': 3_600_000, '4h': 14_400_000, '1d': 86_400_000,
 };
 export const TIMEFRAME_KEYS = Object.keys(TIMEFRAMES);

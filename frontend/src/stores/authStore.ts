@@ -18,9 +18,19 @@ export const useAuth = create<AuthState>((set) => ({
   ready: false,
   remember: isRemembered(),
   login: async (identifier, password, remember = true) => {
-    const data = await post<{ accessToken: string; refreshToken: string; user: User }>('/api/v1/auth/login', { identifier, password });
+    const cleanId = identifier.trim();
+    const payload: Record<string, string> = {
+      identifier: cleanId,
+      password,
+    };
+    if (cleanId.includes('@')) {
+      payload.email = cleanId;
+    } else {
+      payload.username = cleanId;
+    }
+    const data = await post<{ accessToken: string; refreshToken: string; user: User }>('/api/v1/auth/login', payload);
     setTokens(data.accessToken, data.refreshToken, remember);
-    set({ user: data.user, remember });
+    set({ user: data.user, remember, ready: true });
   },
   register: async (input) => {
     await post('/api/v1/auth/register', input);

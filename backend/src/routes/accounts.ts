@@ -13,7 +13,26 @@ r.use(requireAuth);
 
 // List my accounts with live equity (balance + unrealized)
 r.get('/', ah(async (req: AuthedRequest, res) => {
-  const accounts = await prisma.account.findMany({ where: { userId: req.userId! }, orderBy: { createdAt: 'asc' } });
+  let accounts = await prisma.account.findMany({ where: { userId: req.userId! }, orderBy: { createdAt: 'asc' } });
+
+  // Auto-provision both DEMO and LIVE accounts if either is missing (Quotex parity)
+  const hasDemo = accounts.some((a) => a.accountType === 'DEMO');
+  const hasLive = accounts.some((a) => a.accountType === 'LIVE');
+
+  if (!hasDemo) {
+    const demo = await prisma.account.create({
+      data: { userId: req.userId!, accountNumber: accountNumber(), accountType: 'DEMO', currency: 'USD', balance: env.DEMO_STARTING_BALANCE, status: 'ACTIVE' },
+    });
+    await prisma.walletTransaction.create({ data: { accountId: demo.id, type: 'DEPOSIT', amount: env.DEMO_STARTING_BALANCE, balanceAfter: env.DEMO_STARTING_BALANCE, memo: 'Demo starting balance (simulated)' } });
+    accounts.unshift(demo);
+  }
+  if (!hasLive) {
+    const live = await prisma.account.create({
+      data: { userId: req.userId!, accountNumber: accountNumber().replace('DEMO', 'REAL'), accountType: 'LIVE', currency: 'USD', balance: 0.00, status: 'ACTIVE' },
+    });
+    accounts.push(live);
+  }
+
   const provider = getProvider();
   const out = [];
   for (const a of accounts) {
@@ -30,19 +49,50 @@ r.get('/', ah(async (req: AuthedRequest, res) => {
   res.json({ success: true, data: out, error: null });
 }));
 
-// Create a new DEMO account (LIVE disabled until provider configured)
+// Create a new account (LIVE or DEMO)
 r.post('/', ah(async (req: AuthedRequest, res) => {
   const { accountType } = (req.body ?? {}) as { accountType?: string };
-  if (accountType === 'LIVE') {
-    res.status(422).json({ success: false, data: null, error: { code: 'LIVE_TRADING_DISABLED', message: 'Live execution is disabled until a licensed execution provider is configured' } });
-    return;
-  }
+  const isLive = accountType === 'LIVE';
+  const startingBal = isLive ? 0.00 : env.DEMO_STARTING_BALANCE;
+
   const acct = await prisma.account.create({
-    data: { userId: req.userId!, accountNumber: accountNumber(), accountType: 'DEMO', currency: 'USD', balance: env.DEMO_STARTING_BALANCE, status: 'ACTIVE' },
+    data: {
+      userId: req.userId!,
+      accountNumber: isLive ? accountNumber().replace('DEMO', 'REAL') : accountNumber(),
+      accountType: isLive ? 'LIVE' : 'DEMO',
+      currency: 'USD',
+      balance: startingBal,
+      status: 'ACTIVE',
+    },
   });
-  await prisma.walletTransaction.create({ data: { accountId: acct.id, type: 'DEPOSIT', amount: env.DEMO_STARTING_BALANCE, balanceAfter: env.DEMO_STARTING_BALANCE, memo: 'Demo starting balance (simulated)' } });
+
+  if (!isLive) {
+    await prisma.walletTransaction.create({
+      data: { accountId: acct.id, type: 'DEPOSIT', amount: startingBal, balanceAfter: startingBal, memo: 'Demo starting balance (simulated)' },
+    });
+  }
+
   await audit({ actorId: req.userId, action: 'ACCOUNT_CREATE', entityType: 'Account', entityId: acct.id });
   res.status(201).json({ success: true, data: acct, error: null });
+}));
+
+// Reset demo account balance back to default $10,000 (Quotex reload feature)
+r.post('/:id/reset-demo', ah(async (req: AuthedRequest, res) => {
+  const acct = await prisma.account.findFirst({ where: { id: req.params.id, userId: req.userId! } });
+  if (!acct) { res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'Account not found' } }); return; }
+  if (acct.accountType !== 'DEMO') {
+    res.status(400).json({ success: false, data: null, error: { code: 'INVALID_ACCOUNT_TYPE', message: 'Only practice demo accounts can be reloaded' } });
+    return;
+  }
+  const starting = env.DEMO_STARTING_BALANCE;
+  const updated = await prisma.account.update({
+    where: { id: acct.id },
+    data: { balance: starting, lockedBalance: 0 },
+  });
+  await prisma.walletTransaction.create({
+    data: { accountId: acct.id, type: 'DEPOSIT', amount: starting, balanceAfter: starting, memo: 'Demo balance reload ($10,000)' },
+  });
+  res.json({ success: true, data: { ...updated, balance: Number(updated.balance) }, error: null });
 }));
 
 // Dashboard stats — all from backend

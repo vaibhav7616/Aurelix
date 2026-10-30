@@ -5,6 +5,7 @@ import { router } from './router';
 import { queryClient } from './lib/queryClient';
 import { useAuth } from './stores/authStore';
 import { Toasts } from './components/ui/Toasts';
+import { TradeSettlementOverlay } from './components/trading/TradeSettlementOverlay';
 
 export default function App() {
   const bootstrap = useAuth((s) => s.bootstrap);
@@ -13,6 +14,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
       <Toasts />
+      <TradeSettlementOverlay />
     </QueryClientProvider>
   );
 }

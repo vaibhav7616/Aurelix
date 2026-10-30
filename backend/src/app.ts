@@ -24,6 +24,7 @@ import paymentRoutes from './routes/payments';
 import withdrawalRoutes from './routes/withdrawals';
 import notificationRoutes from './routes/notifications';
 import adminRoutes from './routes/admin';
+import leaderboardRoutes from './routes/leaderboard';
 
 export function createApp(): express.Express {
   const app = express();
@@ -55,7 +56,7 @@ export function createApp(): express.Express {
     res.status(ok ? 200 : 503).json({ success: ok, data: { backend: true, postgres: db, redis }, error: ok ? null : { code: 'NOT_READY', message: 'Dependency check failed' } });
   });
 
-  app.use('/api/v1/auth', authLimiter, authRoutes);
+  app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/users', apiLimiter, userRoutes);
   app.use('/api/v1/accounts', apiLimiter, accountRoutes);
   app.use('/api/v1/assets', apiLimiter, assetRoutes);
@@ -69,6 +70,7 @@ export function createApp(): express.Express {
   app.use('/api/v1/withdrawals', apiLimiter, withdrawalRoutes);
   app.use('/api/v1/notifications', apiLimiter, notificationRoutes);
   app.use('/api/v1/admin', apiLimiter, adminRoutes);
+  app.use('/api/v1/leaderboard', apiLimiter, leaderboardRoutes);
 
   app.use('/api', (_req, res) => res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'Route not found' } }));
   app.use(errorHandler);

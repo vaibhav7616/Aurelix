@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { get } from '../../lib/api';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { get, del, apiError } from '../../lib/api';
+import { useUI } from '../../stores/uiStore';
 import { useTerminal } from '../../stores/terminalStore';
 import { fmtMoney, fmtPrice, fmtTime } from '../../lib/format';
-import { fmtHMS, fmtDur, secondsLeft, previewOutcome, type OptionTrade } from '../../lib/options';
+import { fmtHMS, fmtDur, secondsLeft, previewOutcome, type OptionTrade, type PendingTrade } from '../../lib/options';
+import { getAssetMeta } from '../../lib/assetMeta';
 import { Empty, TableSkeleton } from '../ui/primitives';
 import { clsx } from 'clsx';
 
@@ -48,19 +50,15 @@ export function OpenTradesList({ accountId }: { accountId?: string | null }) {
   if (isLoading) return <TableSkeleton rows={2} cols={2} />;
   if (!data?.length) {
     return (
-      <div className="text-center py-10 px-5 flex flex-col items-center justify-center">
-        <div className="w-14 h-14 rounded-2xl bg-base-800 border border-line flex items-center justify-center text-2xl text-mute mb-3 shadow-inner">
-          📦
-        </div>
-        <div className="text-[13px] font-bold text-white mb-1">No active trades</div>
-        <div className="text-[11px] text-mute leading-relaxed max-w-[210px]">
-          You don&apos;t have a trade history yet. You can open a trade using the form above.
-        </div>
+      <div className="text-center py-8 px-4">
+        <div className="mx-auto w-10 h-10 rounded-full bg-white/[0.06] border border-line flex items-center justify-center text-mute">◔</div>
+        <div className="mt-2.5 text-[12px] font-semibold">No running trades</div>
+        <div className="text-[11px] text-mute mt-1 leading-relaxed">Pick a time and an amount, then press <span className="text-up font-semibold">Up</span> or <span className="text-down font-semibold">Down</span>.</div>
       </div>
     );
   }
   return (
-    <div className="divide-y divide-line">
+    <div className="divide-y divide-white/[0.06]">
       {data.map((t) => {
         const mark = ticks[t.symbol]?.mid;
         const left = secondsLeft(t.expiresAt, now);
@@ -68,20 +66,61 @@ export function OpenTradesList({ accountId }: { accountId?: string | null }) {
         const pv = previewOutcome(t, mark);
         const tone = pv === 'WON' ? 'up' : pv === 'LOST' ? 'down' : 'flat';
         return (
-          <div key={t.id} className="px-3.5 py-2.5 flex items-center gap-3 hover:bg-white/[0.02] transition">
+          <div key={t.id} className="px-3 py-2 flex items-center gap-2.5">
             <Ring frac={frac} tone={tone} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
-                <span className="text-xs font-bold text-white">{t.symbol}</span>
+                <span className="text-xs font-bold">{t.symbol}</span>
                 <DirBadge d={t.direction} />
               </div>
-              <div className="text-[10px] text-mute font-mono mt-0.5">{fmtPrice(t.entryPrice)} → {mark ? fmtPrice(mark) : '…'} · {fmtDur(t.durationSec)}</div>
+              <div className="text-[10px] text-mute ax-num mt-0.5">{fmtPrice(t.entryPrice)} → {mark ? fmtPrice(mark) : '…'} · {fmtDur(t.durationSec)}</div>
             </div>
             <div className="text-right">
-              <div className={clsx('font-mono text-xs font-bold', tone === 'up' ? 'text-[#00c076]' : tone === 'down' ? 'text-[#ff5447]' : 'text-fog')}>
+              <div className={clsx('ax-num text-xs font-bold', tone === 'up' ? 'text-up' : tone === 'down' ? 'text-down' : 'text-fog')}>
                 {pv === 'WON' ? `+${fmtMoney(t.stake * t.payoutPct / 100)}` : pv === 'LOST' ? `−${fmtMoney(t.stake)}` : fmtMoney(0)}
               </div>
-              <div className="font-mono text-[10px] text-mute mt-0.5">{fmtHMS(left)}</div>
+              <div className="ax-num text-[10px] text-mute mt-0.5">{fmtHMS(left)}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Active pending trades (execution by price) with cancel — shown above the running trades. */
+export function PendingTradesList({ accountId }: { accountId?: string | null }) {
+  const { ticks } = useTerminal();
+  const qc = useQueryClient();
+  const push = useUI((s) => s.push);
+  const { data } = useQuery({
+    queryKey: ['pending', accountId],
+    queryFn: () => get<PendingTrade[]>('/api/v1/options/pending', accountId ? { accountId } : {}),
+    refetchInterval: 5000,
+  });
+  const cancel = useMutation({
+    mutationFn: (id: string) => del<PendingTrade>(`/api/v1/options/pending/${id}`),
+    onSuccess: () => { ['pending', 'accounts'].forEach((k) => qc.invalidateQueries({ queryKey: [k] })); push('info', 'Pending trade cancelled — stake released'); },
+    onError: (e) => push('err', apiError(e)),
+  });
+  if (!data?.length) return null;
+  return (
+    <div className="divide-y divide-white/[0.06] border-b border-line mb-1">
+      {data.map((p) => {
+        const mark = ticks[p.symbol]?.mid;
+        return (
+          <div key={p.id} className="px-3 py-2 flex items-center gap-2.5">
+            <div className="w-6 h-6 shrink-0 rounded-full bg-warn/15 text-warn flex items-center justify-center text-[11px]">⏱</div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-bold">{p.symbol}</span>
+                <DirBadge d={p.direction} />
+              </div>
+              <div className="text-[10px] text-mute ax-num mt-0.5">{p.triggerAbove ? '≥' : '≤'} {fmtPrice(p.targetPrice)} · now {mark ? fmtPrice(mark) : '…'} · {fmtDur(p.durationSec)}</div>
+            </div>
+            <div className="text-right">
+              <div className="ax-num text-xs font-bold">{fmtMoney(p.stake)}</div>
+              <button onClick={() => cancel.mutate(p.id)} disabled={cancel.isPending} className="text-[10px] text-[#ff5447] hover:underline font-semibold mt-0.5">Cancel</button>
             </div>
           </div>
         );
@@ -119,7 +158,7 @@ export function OpenTradesTable({ compact = false }: { compact?: boolean }) {
                 <td className="ax-td ax-num text-fog">{fmtPrice(t.entryPrice)}</td>
                 <td className={clsx('ax-td ax-num', pv === 'WON' ? 'text-up' : pv === 'LOST' ? 'text-down' : '')}>{mark ? fmtPrice(mark) : '—'}</td>
                 <td className="ax-td ax-num text-right text-fog">{t.payoutPct}% · {fmtMoney(t.stake * (1 + t.payoutPct / 100))}</td>
-                <td className="ax-td text-right"><ResultBadge s={pv as OptionTrade['status']} /></td>
+                <td className="ax-td text-right"><ResultBadge s={pv === 'OPEN' ? 'OPEN' : pv} /></td>
                 <td className="ax-td ax-num font-semibold">
                   <span className="inline-flex items-center gap-1.5"><Ring frac={left / t.durationSec} tone={pv === 'WON' ? 'up' : pv === 'LOST' ? 'down' : 'flat'} />{fmtHMS(left)}</span>
                 </td>
@@ -170,6 +209,80 @@ export function TradeHistoryTable({ pageSize = 30, compact = false }: { pageSize
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/** Compact settled trades card list — Quotex style for the right rail sidebar. */
+export function CompactTradeHistoryList({ accountId }: { accountId?: string | null }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['options', 'history', accountId, 25],
+    queryFn: () => get<{ items: OptionTrade[] }>('/api/v1/options/history', { pageSize: 25, ...(accountId ? { accountId } : {}) }),
+    refetchInterval: 4000,
+  });
+
+  if (isLoading) return <TableSkeleton rows={3} cols={2} />;
+  if (!data?.items.length) {
+    return (
+      <div className="text-center py-8 px-4 text-slate-400">
+        <div className="mx-auto w-10 h-10 rounded-full bg-white/[0.05] border border-white/10 flex items-center justify-center text-slate-500 mb-2">
+          ◷
+        </div>
+        <div className="text-xs font-semibold text-slate-300">No closed trades yet</div>
+        <div className="text-[11px] text-slate-500 mt-1">Finished trades will appear here with your profit and strike details.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="divide-y divide-white/[0.06]">
+      {data.items.map((t) => {
+        const meta = getAssetMeta(t.symbol);
+        const isWin = t.status === 'WON';
+        const isTie = t.status === 'TIE';
+        const isUp = t.direction === 'UP';
+        const profit = Number(t.profit ?? 0);
+
+        return (
+          <div key={t.id} className="p-2.5 hover:bg-white/[0.02] transition rounded-lg flex items-center justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs leading-none">{meta.flag1}{meta.flag2}</span>
+                <span className="text-xs font-bold text-white">{t.symbol}</span>
+                <span
+                  className={clsx(
+                    'text-[9px] font-black px-1.5 py-0.2 rounded flex items-center gap-0.5',
+                    isUp ? 'text-[#00c076] bg-[#00c076]/15 border border-[#00c076]/30' : 'text-[#ff5447] bg-[#ff5447]/15 border border-[#ff5447]/30'
+                  )}
+                >
+                  {isUp ? '▲' : '▼'} {isUp ? 'CALL' : 'PUT'}
+                </span>
+              </div>
+              <div className="text-[10px] text-slate-400 font-mono mt-1 flex items-center gap-1.5">
+                <span>{fmtPrice(t.entryPrice)}</span>
+                <span className="text-slate-600">→</span>
+                <span>{t.closePrice != null ? fmtPrice(t.closePrice) : '…'}</span>
+                <span className="text-slate-600">·</span>
+                <span>{fmtDur(t.durationSec)}</span>
+              </div>
+            </div>
+
+            <div className="text-right shrink-0">
+              <div
+                className={clsx(
+                  'text-xs font-bold font-mono',
+                  isWin ? 'text-[#00c076]' : isTie ? 'text-slate-400' : 'text-[#ff5447]'
+                )}
+              >
+                {isWin ? `+${fmtMoney(profit)}` : isTie ? fmtMoney(t.stake) : `-${fmtMoney(t.stake)}`}
+              </div>
+              <div className="text-[9.5px] text-slate-500 font-mono mt-0.5">
+                {t.settledAt ? new Date(t.settledAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''}
+              </div>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

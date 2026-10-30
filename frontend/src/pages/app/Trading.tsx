@@ -4,7 +4,11 @@ import { get } from '../../lib/api';
 import { useTerminal } from '../../stores/terminalStore';
 import { PriceChart } from '../../components/charts/PriceChart';
 import { Ticket } from '../../components/trading/Ticket';
-import { OpenTradesList, PendingTradesList, TradeHistoryTable } from '../../components/trading/TradesPanel';
+import { SignalsDrawer } from '../../components/trading/SignalsDrawer';
+import { SettingsModal } from '../../components/trading/SettingsModal';
+import { useSignalsStore } from '../../stores/signalsStore';
+import { useSettingsStore } from '../../stores/settingsStore';
+import { OpenTradesList, PendingTradesList, TradeHistoryTable, CompactTradeHistoryList } from '../../components/trading/TradesPanel';
 import { useIsMobile } from '../../hooks/useMediaQuery';
 import { getAssetMeta } from '../../lib/assetMeta';
 import type { OptionTrade } from '../../lib/options';
@@ -235,7 +239,7 @@ function RailTabs() {
           </>
         ) : (
           <div className="text-[11px]">
-            <TradeHistoryTable pageSize={12} compact />
+            <CompactTradeHistoryList accountId={accountId} />
           </div>
         )}
       </div>
@@ -246,13 +250,36 @@ function RailTabs() {
 function MobileTrade() {
   const [tab, setTab] = useState<'chart' | 'trade' | 'trades'>('chart');
   const [showAssetSelector, setShowAssetSelector] = useState(false);
+  const toggleSignals = useSignalsStore((s) => s.toggleOpen);
+  const toggleSettings = useSettingsStore((s) => s.toggleOpen);
 
   return (
-    <div className="flex flex-col h-[calc(100dvh-52px-56px)] min-h-[480px]">
+    <div className="flex flex-col h-[calc(100dvh-52px-56px)] min-h-[480px] relative">
       <AssetTabs onOpenSelector={() => setShowAssetSelector(true)} />
       <AssetSelectorModal isOpen={showAssetSelector} onClose={() => setShowAssetSelector(false)} />
-      <div className="flex-1 min-h-0 overflow-hidden">
-        {tab === 'chart' && <PriceChart />}
+      <SignalsDrawer />
+      <SettingsModal />
+
+      <div className="flex-1 min-h-0 overflow-hidden relative">
+        {tab === 'chart' && (
+          <div className="h-full w-full relative">
+            <PriceChart />
+            <div className="absolute top-2 left-2 z-30 flex items-center gap-1.5">
+              <button
+                onClick={toggleSignals}
+                className="h-7 px-2.5 rounded-lg text-[11px] font-black uppercase tracking-wider flex items-center gap-1 bg-[#161a25]/90 text-emerald-400 border border-emerald-500/30 backdrop-blur-md active:scale-95"
+              >
+                <span>⚡ Signals</span>
+              </button>
+              <button
+                onClick={toggleSettings}
+                className="h-7 px-2 rounded-lg text-xs bg-[#161a25]/90 text-slate-300 border border-white/10 backdrop-blur-md active:scale-95"
+              >
+                ⚙️
+              </button>
+            </div>
+          </div>
+        )}
         {tab === 'trade' && <div className="h-full overflow-hidden bg-base-900"><Ticket /></div>}
         {tab === 'trades' && <div className="h-full overflow-auto bg-base-900"><RailTabs /></div>}
       </div>
@@ -277,22 +304,56 @@ function MobileTrade() {
 export function Trading() {
   const isMobile = useIsMobile();
   const [showAssetSelector, setShowAssetSelector] = useState(false);
+  const toggleSignals = useSignalsStore((s) => s.toggleOpen);
+  const isSignalsOpen = useSignalsStore((s) => s.isOpen);
+  const toggleSettings = useSettingsStore((s) => s.toggleOpen);
 
   if (isMobile) return <MobileTrade />;
 
   return (
-    <div className="h-[calc(100vh-52px)] min-h-[560px] flex flex-col bg-[#121620]">
+    <div className="h-[calc(100vh-52px)] min-h-[560px] flex flex-col bg-[#121620] relative">
       {/* Quotex Asset Tabs */}
       <AssetTabs onOpenSelector={() => setShowAssetSelector(true)} />
 
       {/* Asset Selector Modal */}
       <AssetSelectorModal isOpen={showAssetSelector} onClose={() => setShowAssetSelector(false)} />
 
+      {/* Live Algorithmic Trading Signals Drawer */}
+      <SignalsDrawer />
+
+      {/* Fast 1-Click Trading & Customization Settings Modal */}
+      <SettingsModal />
+
       {/* Full-bleed Quotex layout: [Chart 100% height] [Right Ticket + Trades Rail] */}
-      <div className="flex-1 grid grid-cols-[minmax(0,1fr)_310px] min-h-0">
+      <div className="flex-1 grid grid-cols-[minmax(0,1fr)_310px] min-h-0 relative">
         {/* Full-height Quotex Candlestick Chart */}
         <div className="h-full w-full relative min-h-0 overflow-hidden">
           <PriceChart />
+
+          {/* Quotex Floating Quick Action Bar: Signals & Settings */}
+          <div className="absolute top-3 left-3 z-30 flex items-center gap-2">
+            <button
+              onClick={toggleSignals}
+              className={clsx(
+                'h-8 px-3 rounded-lg text-xs font-black uppercase tracking-wider flex items-center gap-1.5 transition shadow-lg border active:scale-95 backdrop-blur-md',
+                isSignalsOpen
+                  ? 'bg-emerald-500 text-slate-950 border-emerald-400'
+                  : 'bg-[#161a25]/90 hover:bg-[#1c2230] text-emerald-400 border-emerald-500/30 hover:border-emerald-500/60'
+              )}
+            >
+              <span className="text-sm">⚡</span>
+              <span>Signals</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse ml-0.5" />
+            </button>
+
+            <button
+              onClick={toggleSettings}
+              className="h-8 px-2.5 rounded-lg text-xs font-bold bg-[#161a25]/90 hover:bg-[#1c2230] text-slate-300 hover:text-white border border-white/10 hover:border-white/20 transition shadow-lg active:scale-95 backdrop-blur-md flex items-center gap-1"
+              title="Trading Settings (1-Click, Audio, Latency)"
+            >
+              <span>⚙️</span>
+            </button>
+          </div>
         </div>
 
         {/* Right Rail: Quotex Ticket + Open Trades */}

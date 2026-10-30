@@ -2,38 +2,59 @@ import { create } from 'zustand';
 
 export interface Tick { symbol: string; bid: number; ask: number; mid: number; spread: number; changePct24h: number; ts: number; demo: boolean }
 
+export interface LiveCandle { symbol: string; timeframe: string; open: number; high: number; low: number; close: number; volume: number; openTime: number; closeTime: number; event: 'open' | 'close' }
+
 interface TerminalState {
   symbol: string;
   timeframe: string;
-  chartType: 'candles' | 'area' | 'line' | 'bars' | 'heiken_ashi';
+  /** serverTime - clientTime (ms). Used so candle buckets & countdowns follow the SERVER clock (settlement clock). */
+  clockOffset: number;
+  /** last candle lifecycle event per symbol|timeframe (the server rolled a candle) */
+  candleEvents: Record<string, LiveCandle>;
+  /** expiry currently selected in the ticket → chart previews the trade window before you click */
+  pendingDurationSec: number;
+  setPendingDuration: (sec: number) => void;
+  /** feed health: timestamp of the last quote received */
+  lastQuoteAt: number;
+  chartType: 'candles' | 'line' | 'area';
   accountId: string | null;
   ticks: Record<string, Tick>;
   favorites: string[];
+  /** asset tabs across the top of the terminal (Quotex style) */
   openTabs: string[];
-  soundEnabled: boolean;
+  /** "pending trade" (open at a target price) toggle in the ticket */
   pendingTrade: boolean;
   setSymbol: (s: string) => void;
   setTimeframe: (t: string) => void;
-  setChartType: (t: 'candles' | 'area' | 'line' | 'bars' | 'heiken_ashi') => void;
+  setChartType: (t: 'candles' | 'line' | 'area') => void;
   setAccountId: (id: string | null) => void;
   applyTick: (t: Tick) => void;
+  applyCandleEvent: (c: LiveCandle) => void;
+  setClockOffset: (ms: number) => void;
   toggleFavorite: (s: string) => void;
   addTab: (s: string) => void;
   closeTab: (s: string) => void;
-  toggleSound: () => void;
-  setSoundEnabled: (v: boolean) => void;
   setPendingTrade: (v: boolean) => void;
 }
 
+/** Current time on the server clock (best effort). */
+export function serverNow(): number {
+  return Date.now() + useTerminal.getState().clockOffset;
+}
+
 export const useTerminal = create<TerminalState>((set) => ({
-  symbol: localStorage.getItem('ax_active_sym') ?? 'EUR/USD',
-  timeframe: '1m',
+  symbol: localStorage.getItem('ax_active_sym') ?? 'BTC/USD',
+  timeframe: localStorage.getItem('ax_tf') || '1m',
+  clockOffset: 0,
+  candleEvents: {},
+  pendingDurationSec: Number(localStorage.getItem('ax_opt_dur') ?? 60) || 60,
+  setPendingDuration: (pendingDurationSec) => set({ pendingDurationSec }),
+  lastQuoteAt: 0,
   chartType: 'candles',
   accountId: localStorage.getItem('ax_account'),
   ticks: {},
-  favorites: JSON.parse(localStorage.getItem('ax_favs') ?? '["EUR/USD","GBP/USD","USD/JPY","BTC/USD"]'),
-  openTabs: JSON.parse(localStorage.getItem('ax_tabs') ?? '["EUR/USD","GBP/USD","USD/JPY"]'),
-  soundEnabled: localStorage.getItem('ax_sound') !== 'false',
+  favorites: JSON.parse(localStorage.getItem('ax_favs') ?? '["BTC/USD","ETH/USD"]'),
+  openTabs: JSON.parse(localStorage.getItem('ax_tabs') ?? '["BTC/USD","ETH/USD","EUR/USD"]'),
   pendingTrade: false,
   setSymbol: (symbol) => {
     localStorage.setItem('ax_active_sym', symbol);
@@ -43,23 +64,25 @@ export const useTerminal = create<TerminalState>((set) => ({
       return { symbol, openTabs: tabs };
     });
   },
-  setTimeframe: (timeframe) => set({ timeframe }),
+  setTimeframe: (timeframe) => { localStorage.setItem('ax_tf', timeframe); set({ timeframe }); },
   setChartType: (chartType) => set({ chartType }),
   setAccountId: (accountId) => {
     if (accountId) localStorage.setItem('ax_account', accountId);
     set({ accountId });
   },
-  applyTick: (t) => set((s) => ({ ticks: { ...s.ticks, [t.symbol]: t } })),
-  toggleFavorite: (sym) => set((s) => {
-    const favs = s.favorites.includes(sym) ? s.favorites.filter((f) => f !== sym) : [...s.favorites, sym];
-    localStorage.setItem('ax_favs', JSON.stringify(favs));
-    return { favorites: favs };
+  applyTick: (t) => set((s) => {
+    // keep a smoothed server-clock offset from tick timestamps (they are stamped server-side)
+    const sample = t.ts - Date.now();
+    const off = s.clockOffset === 0 ? sample : s.clockOffset * 0.9 + sample * 0.1;
+    return { ticks: { ...s.ticks, [t.symbol]: t }, lastQuoteAt: Date.now(), clockOffset: Math.abs(off - s.clockOffset) > 5 ? off : s.clockOffset };
   }),
+  applyCandleEvent: (c) => set((s) => ({ candleEvents: { ...s.candleEvents, [`${c.symbol}|${c.timeframe}`]: c } })),
+  setClockOffset: (clockOffset) => set({ clockOffset }),
   addTab: (sym) => set((s) => {
+    localStorage.setItem('ax_active_sym', sym);
     if (s.openTabs.includes(sym)) return { symbol: sym };
     const tabs = [...s.openTabs, sym];
     localStorage.setItem('ax_tabs', JSON.stringify(tabs));
-    localStorage.setItem('ax_active_sym', sym);
     return { openTabs: tabs, symbol: sym };
   }),
   closeTab: (sym) => set((s) => {
@@ -70,14 +93,10 @@ export const useTerminal = create<TerminalState>((set) => ({
     localStorage.setItem('ax_active_sym', nextSym);
     return { openTabs: tabs, symbol: nextSym };
   }),
-  toggleSound: () => set((s) => {
-    const next = !s.soundEnabled;
-    localStorage.setItem('ax_sound', next ? 'true' : 'false');
-    return { soundEnabled: next };
-  }),
-  setSoundEnabled: (v: boolean) => {
-    localStorage.setItem('ax_sound', v ? 'true' : 'false');
-    set({ soundEnabled: v });
-  },
   setPendingTrade: (pendingTrade) => set({ pendingTrade }),
+  toggleFavorite: (sym) => set((s) => {
+    const favs = s.favorites.includes(sym) ? s.favorites.filter((f) => f !== sym) : [...s.favorites, sym];
+    localStorage.setItem('ax_favs', JSON.stringify(favs));
+    return { favorites: favs };
+  }),
 }));

@@ -11,6 +11,7 @@ import { MarketsApp } from './pages/app/MarketsApp';
 import { PositionsPage } from './pages/app/PositionsPage';
 import { HistoryPage } from './pages/app/HistoryPage';
 import { WalletPage, TransfersPage } from './pages/app/WalletPages';
+import { LeaderboardPage } from './pages/app/LeaderboardPage';
 import { NotificationsPage, SettingsPage, MorePage } from './pages/app/MiscApp';
 import { AdminOverview, AdminUsers, AdminAccounts, AdminAssets, AdminMarket } from './pages/admin/AdminPages';
 import { AdminOptions, AdminOrders, AdminPositions, AdminTrades, AdminDeposits, AdminWithdrawals, AdminRisk, AdminBroadcast, AdminAudit, AdminSettings } from './pages/admin/AdminOps';
@@ -54,6 +55,8 @@ export const router = createBrowserRouter([
     children: [
       { path: '/trading', element: <Trading /> },
       { path: '/dashboard', element: <Dashboard /> },
+      { path: '/top', element: <LeaderboardPage /> },
+      { path: '/leaderboard', element: <LeaderboardPage /> },
       { path: '/markets-app', element: <MarketsApp /> },
       { path: '/positions', element: <PositionsPage /> },
       { path: '/orders', element: <PositionsPage /> },

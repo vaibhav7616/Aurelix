@@ -5,6 +5,7 @@ import { useUI } from '../../stores/uiStore';
 import { useTerminal } from '../../stores/terminalStore';
 import { fmtMoney, fmtPrice, fmtTime } from '../../lib/format';
 import { fmtHMS, fmtDur, secondsLeft, previewOutcome, type OptionTrade, type PendingTrade } from '../../lib/options';
+import { getAssetMeta } from '../../lib/assetMeta';
 import { Empty, TableSkeleton } from '../ui/primitives';
 import { clsx } from 'clsx';
 
@@ -211,3 +212,78 @@ export function TradeHistoryTable({ pageSize = 30, compact = false }: { pageSize
     </div>
   );
 }
+
+/** Compact settled trades card list — Quotex style for the right rail sidebar. */
+export function CompactTradeHistoryList({ accountId }: { accountId?: string | null }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['options', 'history', accountId, 25],
+    queryFn: () => get<{ items: OptionTrade[] }>('/api/v1/options/history', { pageSize: 25, ...(accountId ? { accountId } : {}) }),
+    refetchInterval: 4000,
+  });
+
+  if (isLoading) return <TableSkeleton rows={3} cols={2} />;
+  if (!data?.items.length) {
+    return (
+      <div className="text-center py-8 px-4 text-slate-400">
+        <div className="mx-auto w-10 h-10 rounded-full bg-white/[0.05] border border-white/10 flex items-center justify-center text-slate-500 mb-2">
+          ◷
+        </div>
+        <div className="text-xs font-semibold text-slate-300">No closed trades yet</div>
+        <div className="text-[11px] text-slate-500 mt-1">Finished trades will appear here with your profit and strike details.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="divide-y divide-white/[0.06]">
+      {data.items.map((t) => {
+        const meta = getAssetMeta(t.symbol);
+        const isWin = t.status === 'WON';
+        const isTie = t.status === 'TIE';
+        const isUp = t.direction === 'UP';
+        const profit = Number(t.profit ?? 0);
+
+        return (
+          <div key={t.id} className="p-2.5 hover:bg-white/[0.02] transition rounded-lg flex items-center justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs leading-none">{meta.flag1}{meta.flag2}</span>
+                <span className="text-xs font-bold text-white">{t.symbol}</span>
+                <span
+                  className={clsx(
+                    'text-[9px] font-black px-1.5 py-0.2 rounded flex items-center gap-0.5',
+                    isUp ? 'text-[#00c076] bg-[#00c076]/15 border border-[#00c076]/30' : 'text-[#ff5447] bg-[#ff5447]/15 border border-[#ff5447]/30'
+                  )}
+                >
+                  {isUp ? '▲' : '▼'} {isUp ? 'CALL' : 'PUT'}
+                </span>
+              </div>
+              <div className="text-[10px] text-slate-400 font-mono mt-1 flex items-center gap-1.5">
+                <span>{fmtPrice(t.entryPrice)}</span>
+                <span className="text-slate-600">→</span>
+                <span>{t.closePrice != null ? fmtPrice(t.closePrice) : '…'}</span>
+                <span className="text-slate-600">·</span>
+                <span>{fmtDur(t.durationSec)}</span>
+              </div>
+            </div>
+
+            <div className="text-right shrink-0">
+              <div
+                className={clsx(
+                  'text-xs font-bold font-mono',
+                  isWin ? 'text-[#00c076]' : isTie ? 'text-slate-400' : 'text-[#ff5447]'
+                )}
+              >
+                {isWin ? `+${fmtMoney(profit)}` : isTie ? fmtMoney(t.stake) : `-${fmtMoney(t.stake)}`}
+              </div>
+              <div className="text-[9.5px] text-slate-500 font-mono mt-0.5">
+                {t.settledAt ? new Date(t.settledAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+

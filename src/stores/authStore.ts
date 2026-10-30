@@ -28,10 +28,17 @@ export const useAuth = create<AuthState>((set, getStore) => ({
   isLoading: false,
 
   login: async (identifier, password, remember = true) => {
-    const res = await post<{ user: User; accessToken: string; refreshToken?: string }>('/api/v1/auth/login', {
-      email: identifier,
+    const cleanId = identifier.trim();
+    const payload: Record<string, string> = {
+      identifier: cleanId,
       password,
-    });
+    };
+    if (cleanId.includes('@')) {
+      payload.email = cleanId;
+    } else {
+      payload.username = cleanId;
+    }
+    const res = await post<{ user: User; accessToken: string; refreshToken?: string }>('/api/v1/auth/login', payload);
     setTokens(res.accessToken, res.refreshToken, remember);
     set({ user: res.user, token: res.accessToken, isAuthenticated: true });
   },

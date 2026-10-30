@@ -1,14 +1,16 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+const devTarget = process.env.VITE_DEV_PROXY || (process.env.API_PORT ? `http://localhost:${process.env.API_PORT}` : 'http://localhost:3000');
+
 export default defineConfig({
   plugins: [react()],
   server: {
     host: '0.0.0.0',
     port: 5173,
     proxy: {
-      '/api': { target: process.env.VITE_DEV_PROXY ?? 'http://localhost:4000', changeOrigin: true },
-      '/socket.io': { target: process.env.VITE_DEV_PROXY ?? 'http://localhost:4000', changeOrigin: true, ws: true },
+      '/api': { target: devTarget, changeOrigin: true },
+      '/socket.io': { target: devTarget, changeOrigin: true, ws: true },
     },
   },
   preview: { host: '0.0.0.0', port: 5173 },

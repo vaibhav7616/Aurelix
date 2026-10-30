@@ -4,6 +4,8 @@ import { getAccessToken } from '../lib/api';
 import { useTerminal, type Tick, type LiveCandle } from '../stores/terminalStore';
 import { queryClient } from '../lib/queryClient';
 import { useUI } from '../stores/uiStore';
+import { soundService } from '../lib/sound';
+import { useSettlementStore } from '../stores/settlementStore';
 
 let socket: Socket | null = null;
 let subscribed: string[] = [];
@@ -53,14 +55,37 @@ export function connectSocket(): Socket {
     queryClient.invalidateQueries({ queryKey: ['options'] });
     queryClient.invalidateQueries({ queryKey: ['option-stats'] });
   });
-  socket.on('option:settled', (o: { symbol: string; status: 'WON' | 'LOST' | 'TIE'; profit: number | null; direction: 'UP' | 'DOWN' }) => {
+  socket.on('option:settled', (o: {
+    id?: string;
+    symbol: string;
+    status: 'WON' | 'LOST' | 'TIE';
+    profit: number | null;
+    direction: 'UP' | 'DOWN';
+    stake?: number;
+    payoutPct?: number;
+    entryPrice?: number;
+    closePrice?: number;
+    durationSec?: number;
+  }) => {
     queryClient.invalidateQueries({ queryKey: ['options'] });
     queryClient.invalidateQueries({ queryKey: ['option-stats'] });
     queryClient.invalidateQueries({ queryKey: ['accounts'] });
     queryClient.invalidateQueries({ queryKey: ['stats'] });
+
     const p = Number(o.profit ?? 0);
-    const text = o.status === 'WON' ? `Won ${o.symbol} ${o.direction === 'UP' ? '▲' : '▼'}  +$${p.toFixed(2)}` : o.status === 'TIE' ? `Tie ${o.symbol} — stake returned` : `Lost ${o.symbol} ${o.direction === 'UP' ? '▲' : '▼'}  −$${Math.abs(p).toFixed(2)}`;
-    useUI.getState().push(o.status === 'WON' ? 'ok' : o.status === 'TIE' ? 'info' : 'err', text);
+
+    useSettlementStore.getState().pushSettlement({
+      id: o.id,
+      symbol: o.symbol ?? 'Asset',
+      direction: o.direction ?? 'UP',
+      status: o.status,
+      stake: Number(o.stake ?? 0),
+      profit: p,
+      payoutPct: Number(o.payoutPct ?? 80),
+      entryPrice: Number(o.entryPrice ?? 0),
+      closePrice: Number(o.closePrice ?? 0),
+      durationSec: o.durationSec,
+    });
   });
   socket.on('pending:updated', (p: { status: string; symbol: string; direction: string; reason: string | null }) => {
     queryClient.invalidateQueries({ queryKey: ['pending'] });
@@ -79,6 +104,9 @@ export function connectSocket(): Socket {
   });
   socket.on('notification:new', (n: { title: string }) => {
     queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    if (n.title.startsWith('Trade won') || n.title.startsWith('Trade lost') || n.title.startsWith('Trade tied')) {
+      return;
+    }
     useUI.getState().push('info', n.title);
   });
   socket.on('connect_error', () => { /* silent — auto retry */ });
@@ -123,4 +151,12 @@ export function disconnectSocket(): void {
   socket?.disconnect();
   socket = null;
   subscribed = [];
+}
+
+export function onCandleEvent(cb: (payload: { candle: any; event: 'open' | 'close' | 'update' }) => void): () => void {
+  const s = connectSocket();
+  s.on('market:candle', cb);
+  return () => {
+    s.off('market:candle', cb);
+  };
 }

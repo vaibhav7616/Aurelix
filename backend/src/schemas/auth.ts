@@ -8,10 +8,11 @@ export const registerSchema = z.object({
 });
 export const loginSchema = z.object({
   identifier: z.string().min(1).max(128).optional(),
-  email: z.string().email().optional(),
+  username: z.string().min(1).max(128).optional(),
+  email: z.string().min(1).max(128).optional(),
   password: z.string().min(1),
-}).refine((d) => (d.identifier?.trim() ?? '') !== '' || (d.email?.trim() ?? '') !== '', {
-  message: 'identifier or email is required',
+}).refine((d) => (d.identifier?.trim() ?? '') !== '' || (d.email?.trim() ?? '') !== '' || (d.username?.trim() ?? '') !== '', {
+  message: 'identifier, username, or email is required',
 });
 export const refreshSchema = z.object({ refreshToken: z.string().min(1) });
 export const forgotSchema = z.object({ email: z.string().email() });

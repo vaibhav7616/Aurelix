@@ -5,9 +5,12 @@ import { useAuth } from './stores/authStore';
 import { useUI } from './stores/uiStore';
 import { AppShell } from './components/layout/AppShell';
 import { Trading } from './pages/app/Trading';
-import { PositionsPage, HistoryPage, WalletPage, NotificationsPage, DashboardPage } from './pages/app/SecondaryPages';
+import { PositionsPage, HistoryPage, NotificationsPage, DashboardPage } from './pages/app/SecondaryPages';
+import { WalletPage } from './pages/app/WalletPages';
+import { LeaderboardPage } from './pages/app/LeaderboardPage';
 import { AdminOptions, AdminOrders } from './pages/admin/AdminOps';
 import { LoginPage, RegisterPage } from './pages/public/AuthPages';
+import { TradeSettlementOverlay } from './components/trading/TradeSettlementOverlay';
 import { clsx } from 'clsx';
 
 const queryClient = new QueryClient({
@@ -60,6 +63,7 @@ function AppContent() {
   return (
     <>
       <ToastHost />
+      <TradeSettlementOverlay />
       <BrowserRouter>
         <Routes>
           {/* Public Auth Routes */}
@@ -70,6 +74,8 @@ function AppContent() {
           <Route element={<AppShell />}>
             <Route index element={<Navigate to="/trading" replace />} />
             <Route path="/trading" element={<Trading />} />
+            <Route path="/top" element={<LeaderboardPage />} />
+            <Route path="/leaderboard" element={<LeaderboardPage />} />
             <Route path="/markets-app" element={<Trading />} />
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/positions" element={<PositionsPage />} />

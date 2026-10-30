@@ -7,6 +7,8 @@ import { fmtMoney, fmtPrice } from '../../lib/format';
 import { fmtHMS, payoutFor, DURATION_PRESETS, nextFixedExpiry, FIXED_TIME_MIN_LEAD_SEC, type OptionsConfig, type OptionTrade, type PendingTrade, type Direction, type ExpiryMode } from '../../lib/options';
 import { getAssetMeta } from '../../lib/assetMeta';
 import { soundService } from '../../lib/sound';
+import { useSettingsStore } from '../../stores/settingsStore';
+import { useSignalsStore } from '../../stores/signalsStore';
 import { FieldError } from '../ui/primitives';
 import { clsx } from 'clsx';
 
@@ -46,6 +48,11 @@ export function Ticket() {
   const [targetPrice, setTargetPrice] = useState<string>('');
   const [err, setErr] = useState<string | null>(null);
   const [flash, setFlash] = useState<Direction | null>(null);
+  const [confirmDir, setConfirmDir] = useState<Direction | null>(null);
+
+  const oneClickTrading = useSettingsStore((s) => s.oneClickTrading);
+  const armedSignal = useSignalsStore((s) => s.armedSignal);
+  const armSignal = useSignalsStore((s) => s.armSignal);
 
   // Expiry mode (Quotex "SWITCH TIME"): TIMER = duration from open, TIME = fixed clock minute
   const [mode, setMode] = useState<ExpiryMode>(() => (localStorage.getItem('ax_opt_mode') === 'TIME' ? 'TIME' : 'TIMER'));
@@ -86,6 +93,14 @@ export function Ticket() {
       setFlash(o.direction);
       setTimeout(() => setFlash(null), 500);
       push('ok', `${o.direction === 'UP' ? '▲ Up' : '▼ Down'} ${o.symbol} · ${fmtMoney(o.stake)} · expires in ${fmtHMS(o.durationSec)}`);
+      // Optimistically push into open options cache for immediate on-chart rendering
+      qc.setQueryData<OptionTrade[]>(['options', 'open'], (prev) => {
+        const arr = prev ? [...prev] : [];
+        if (!arr.some((x) => x.id === o.id)) {
+          arr.unshift(o);
+        }
+        return arr;
+      });
       ['options', 'accounts', 'stats', 'wallet', 'option-stats'].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
     },
     onError: (e) => {
@@ -113,7 +128,18 @@ export function Ticket() {
   });
 
   const submit = (direction: Direction) => {
-    if (!pendingTrade) { open.mutate(direction); return; }
+    if (!oneClickTrading && !confirmDir) {
+      setConfirmDir(direction);
+      return;
+    }
+    setConfirmDir(null);
+    if (!pendingTrade) {
+      open.mutate(direction);
+      if (armedSignal && armedSignal.symbol === symbol) {
+        armSignal(null);
+      }
+      return;
+    }
     if (mode === 'TIME') { setErr('Pending trades use Timer mode — press SWITCH TIME'); return; }
     const tp = Number(targetPrice);
     if (!targetPrice || !Number.isFinite(tp) || tp <= 0) { setErr('Enter the target price for the pending trade'); return; }
@@ -136,6 +162,9 @@ export function Ticket() {
   const invalid = !account || (meta && !meta.enabled) || stake <= 0 || stake < minS || stake > maxS || stake > available;
   const busy = open.isPending || placePending.isPending;
 
+  const isArmedUp = armedSignal?.symbol === symbol && armedSignal?.direction === 'UP';
+  const isArmedDown = armedSignal?.symbol === symbol && armedSignal?.direction === 'DOWN';
+
   return (
     <div className="flex flex-col h-full min-h-0 bg-base-900 border-l border-line select-none">
       {/* Quotex header: pair + payout */}
@@ -148,6 +177,28 @@ export function Ticket() {
           <span className="ax-num text-[16px] font-black text-[#eab308] bg-[#eab308]/10 px-2 py-0.5 rounded">{payoutPct}%</span>
         </div>
       </div>
+
+      {/* Armed Algorithmic Signal Indicator Banner */}
+      {armedSignal && armedSignal.symbol === symbol && (
+        <div className="mx-4 mt-2.5 p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between text-xs animate-in fade-in">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-base leading-none">⚡</span>
+            <div className="min-w-0">
+              <div className="font-black text-emerald-400 flex items-center gap-1 text-[11px] leading-tight">
+                <span>SIGNAL: {armedSignal.direction === 'UP' ? 'CALL ▲' : 'PUT ▼'}</span>
+              </div>
+              <div className="text-[10px] text-slate-400 truncate">{armedSignal.indicator}</div>
+            </div>
+          </div>
+          <button
+            onClick={() => armSignal(null)}
+            className="w-5 h-5 rounded-full bg-white/10 hover:bg-white/20 text-slate-400 hover:text-white flex items-center justify-center text-xs shrink-0"
+            title="Dismiss signal"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
         {/* PENDING TRADE switch (Quotex feature) */}
@@ -203,13 +254,14 @@ export function Ticket() {
               +
             </button>
           </div>
-          {mode === 'TIMER' && showTimePresets && (
+          {/* Quick Expiry Presets */}
+          {mode === 'TIMER' && (
             <div className="grid grid-cols-6 gap-1 mt-2.5 pt-2 border-t border-line">
-              {[5, 15, 30, 60, 300, 900].map((d) => (
+              {[5, 15, 30, 60, 120, 300].map((d) => (
                 <button
                   key={d}
                   onClick={() => { soundService.playClick(); setDurationSec(d); }}
-                  className={clsx('h-6 rounded text-[10px] font-bold transition font-mono', durationSec === d ? 'bg-[#007aff] text-white' : 'bg-base-700 text-fog hover:text-white')}
+                  className={clsx('h-6 rounded text-[10px] font-bold transition font-mono', durationSec === d ? 'bg-[#007aff] text-white shadow-sm' : 'bg-base-700/80 text-fog hover:text-white hover:bg-base-700')}
                 >
                   {d < 60 ? `${d}s` : `${d / 60}m`}
                 </button>
@@ -260,12 +312,46 @@ export function Ticket() {
               +
             </button>
           </div>
-          <div className="grid grid-cols-6 gap-1 mt-2.5 pt-2 border-t border-line">
+
+          {/* Quotex Multipliers & Quick Action Chips */}
+          <div className="grid grid-cols-4 gap-1 mt-2.5 pt-2 border-t border-line">
+            <button
+              onClick={() => { soundService.playClick(); setStake((s) => Math.max(minS, Math.round((s / 2) * 100) / 100)); }}
+              title="Half Stake (1/2)"
+              className="h-6 rounded bg-base-700/80 hover:bg-base-700 text-fog hover:text-white text-[11px] font-bold font-mono transition active:scale-95"
+            >
+              ½
+            </button>
+            <button
+              onClick={() => { soundService.playClick(); setStake((s) => Math.min(available > 0 ? available : maxS, Math.round(s * 2 * 100) / 100)); }}
+              title="Double Stake (2x)"
+              className="h-6 rounded bg-base-700/80 hover:bg-base-700 text-fog hover:text-white text-[11px] font-bold font-mono transition active:scale-95"
+            >
+              2×
+            </button>
+            <button
+              onClick={() => { soundService.playClick(); setStake(minS); }}
+              title="Minimum Stake"
+              className="h-6 rounded bg-base-700/80 hover:bg-base-700 text-fog hover:text-white text-[10px] font-bold uppercase transition active:scale-95"
+            >
+              Min
+            </button>
+            <button
+              onClick={() => { soundService.playClick(); setStake(Math.min(maxS, Math.max(minS, Math.floor(available)))); }}
+              title="All-in / Max Available"
+              className="h-6 rounded bg-base-700/80 hover:bg-base-700 text-amber-400 hover:text-amber-300 text-[10px] font-bold uppercase transition active:scale-95"
+            >
+              Max
+            </button>
+          </div>
+
+          {/* Quick Stake Direct Selection Chips */}
+          <div className="grid grid-cols-6 gap-1 mt-1.5">
             {STAKE_STEPS.map((v) => (
               <button
                 key={v}
                 onClick={() => { soundService.playClick(); setStake(v); }}
-                className={clsx('h-6 rounded text-[10px] font-bold transition font-mono', stake === v ? 'bg-[#007aff] text-white' : 'bg-base-700 text-fog hover:text-white')}
+                className={clsx('h-6 rounded text-[10px] font-bold transition font-mono active:scale-95', stake === v ? 'bg-[#007aff] text-white shadow-sm' : 'bg-base-700/60 text-fog hover:text-white hover:bg-base-700')}
               >
                 ${v}
               </button>
@@ -285,6 +371,34 @@ export function Ticket() {
 
       {/* FOOTER: UP / DOWN BUTTONS (Quotex signature bold buttons) */}
       <div className="shrink-0 px-4 pt-2.5 pb-4 border-t border-line space-y-2.5 bg-base-900">
+        {/* 1-Click Disabled Confirmation Card */}
+        {confirmDir && (
+          <div className="p-3 rounded-xl bg-base-800 border border-amber-400/40 space-y-2 animate-in fade-in">
+            <div className="text-xs font-bold text-amber-300 flex items-center justify-between">
+              <span>Confirm {confirmDir === 'UP' ? 'CALL ▲' : 'PUT ▼'} Trade?</span>
+              <span className="text-white font-mono font-bold">{fmtMoney(stake)}</span>
+            </div>
+            <div className="text-[10px] text-slate-300 flex justify-between font-mono">
+              <span>{symbol}</span>
+              <span>Expiry: {mode === 'TIME' ? fmtClock(fixedExpiry) : `${fmtHMS(durationSec)}`}</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <button
+                onClick={() => setConfirmDir(null)}
+                className="py-1.5 rounded-lg bg-white/10 text-slate-300 text-xs font-bold hover:bg-white/20 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => submit(confirmDir)}
+                className="py-1.5 rounded-lg bg-[#00c076] text-slate-950 text-xs font-black hover:bg-[#00d684] transition"
+              >
+                Confirm Trade
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="grid gap-2.5">
           {/* UP BUTTON: Green Quotex button with UP and Arrow */}
           <button
@@ -292,7 +406,8 @@ export function Ticket() {
             disabled={busy || !!invalid}
             className={clsx(
               'w-full h-12 rounded-lg bg-[#00c076] hover:bg-[#00d684] active:scale-[0.98] text-white font-black text-[15px] flex items-center justify-between px-5 transition shadow-lg',
-              flash === 'UP' && 'brightness-125'
+              flash === 'UP' && 'brightness-125',
+              isArmedUp && 'ring-2 ring-emerald-400 ring-offset-2 ring-offset-base-900 animate-pulse'
             )}
           >
             <span>Up</span>
@@ -307,7 +422,8 @@ export function Ticket() {
             disabled={busy || !!invalid}
             className={clsx(
               'w-full h-12 rounded-lg bg-[#ff5447] hover:bg-[#ff685c] active:scale-[0.98] text-white font-black text-[15px] flex items-center justify-between px-5 transition shadow-lg',
-              flash === 'DOWN' && 'brightness-125'
+              flash === 'DOWN' && 'brightness-125',
+              isArmedDown && 'ring-2 ring-rose-400 ring-offset-2 ring-offset-base-900 animate-pulse'
             )}
           >
             <span>Down</span>
@@ -318,15 +434,24 @@ export function Ticket() {
         </div>
 
         {invalid && account && stake > available && (
-          <div className="text-[10px] text-[#ff5447] text-center font-medium">Investment exceeds available balance ({fmtMoney(available)}).</div>
+          <div className="text-[10px] text-[#ff5447] text-center font-medium">
+            Investment exceeds available balance ({fmtMoney(available)}).
+            {account.accountType === 'LIVE' && (
+              <a href="/wallet" className="block text-[#00c076] underline font-bold mt-1">
+                + Deposit funds to trade live
+              </a>
+            )}
+          </div>
         )}
         {invalid && meta && !meta.enabled && (
           <div className="text-[10px] text-[#ff5447] text-center font-medium">{symbol} is currently halted.</div>
         )}
 
         <div className="flex items-center justify-between text-[11px] px-1 text-mute">
-          <span>Demo Balance</span>
-          <span className="font-mono font-bold text-white">{account ? fmtMoney(account.balance) : '—'}</span>
+          <span>{account?.accountType === 'LIVE' ? 'Live Balance' : 'Demo Balance'}</span>
+          <span className={clsx('font-mono font-bold', account?.accountType === 'LIVE' ? 'text-[#00c076]' : 'text-accent-300')}>
+            {account ? fmtMoney(account.balance) : '—'}
+          </span>
         </div>
       </div>
     </div>

@@ -70,10 +70,11 @@ interface DBStore {
 }
 
 function loadInitialStore(): DBStore {
+  let loaded: any = null;
   try {
     if (fs.existsSync(DB_FILE)) {
       const raw = fs.readFileSync(DB_FILE, 'utf-8');
-      return JSON.parse(raw);
+      loaded = JSON.parse(raw);
     }
   } catch (e) {
     console.warn('[db] Failed to read db.json, using fresh store', e);
@@ -122,6 +123,18 @@ function loadInitialStore(): DBStore {
     updatedAt: new Date().toISOString(),
   };
 
+  const demoLiveAccount = {
+    id: 'act_live_1001',
+    userId: demoUser.id,
+    accountNumber: 'AX-LIVE-491028',
+    accountType: 'LIVE',
+    currency: 'USD',
+    balance: 0,
+    status: 'ACTIVE',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
   const adminAccount = {
     id: 'act_admin_2002',
     userId: adminUser.id,
@@ -141,7 +154,15 @@ function loadInitialStore(): DBStore {
     { id: 'ast_chf', symbol: 'EUR/CHF', name: 'EUR/CHF (OTC)', category: 'CURRENCIES', basePrice: 0.9408, volatility: 0.0005, spread: 0.0002, feeBps: 0, minOrder: 1, maxOrder: 100000, sortOrder: 4, payoutPct: 86, enabled: true, pipSize: 0.00001, tradingHours: '24x7', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
     { id: 'ast_btc', symbol: 'BTC/USD', name: 'BTC/USD (OTC)', category: 'CRYPTO', basePrice: 67432.5, volatility: 0.0035, spread: 0.0004, feeBps: 0, minOrder: 1, maxOrder: 100000, sortOrder: 5, payoutPct: 92, enabled: true, pipSize: 0.01, tradingHours: '24x7', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
     { id: 'ast_eth', symbol: 'ETH/USD', name: 'ETH/USD (OTC)', category: 'CRYPTO', basePrice: 3521.8, volatility: 0.003, spread: 0.0004, feeBps: 0, minOrder: 1, maxOrder: 100000, sortOrder: 6, payoutPct: 88, enabled: true, pipSize: 0.01, tradingHours: '24x7', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-    { id: 'ast_xau', symbol: 'XAU/USD', name: 'XAU/USD (OTC)', category: 'COMMODITIES', basePrice: 2384.6, volatility: 0.0012, spread: 0.0003, feeBps: 0, minOrder: 1, maxOrder: 100000, sortOrder: 7, payoutPct: 94, enabled: true, pipSize: 0.01, tradingHours: '24x7', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    { id: 'ast_sol', symbol: 'SOL/USD', name: 'SOL/USD (OTC)', category: 'CRYPTO', basePrice: 178.4, volatility: 0.004, spread: 0.0005, feeBps: 0, minOrder: 1, maxOrder: 100000, sortOrder: 7, payoutPct: 87, enabled: true, pipSize: 0.01, tradingHours: '24x7', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    { id: 'ast_xau', symbol: 'XAU/USD', name: 'XAU/USD (OTC)', category: 'COMMODITIES', basePrice: 2384.6, volatility: 0.0012, spread: 0.0003, feeBps: 0, minOrder: 1, maxOrder: 100000, sortOrder: 8, payoutPct: 94, enabled: true, pipSize: 0.01, tradingHours: '24x7', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    { id: 'ast_xag', symbol: 'XAG/USD', name: 'XAG/USD (OTC)', category: 'COMMODITIES', basePrice: 30.85, volatility: 0.0018, spread: 0.0004, feeBps: 0, minOrder: 1, maxOrder: 100000, sortOrder: 9, payoutPct: 90, enabled: true, pipSize: 0.001, tradingHours: '24x7', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    { id: 'ast_aud', symbol: 'AUD/USD', name: 'AUD/USD (OTC)', category: 'CURRENCIES', basePrice: 0.6542, volatility: 0.0007, spread: 0.0002, feeBps: 0, minOrder: 1, maxOrder: 100000, sortOrder: 10, payoutPct: 87, enabled: true, pipSize: 0.00001, tradingHours: '24x7', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    { id: 'ast_cad', symbol: 'USD/CAD', name: 'USD/CAD (OTC)', category: 'CURRENCIES', basePrice: 1.3685, volatility: 0.0006, spread: 0.0002, feeBps: 0, minOrder: 1, maxOrder: 100000, sortOrder: 11, payoutPct: 88, enabled: true, pipSize: 0.00001, tradingHours: '24x7', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    { id: 'ast_chf2', symbol: 'USD/CHF', name: 'USD/CHF (OTC)', category: 'CURRENCIES', basePrice: 0.9024, volatility: 0.0006, spread: 0.0002, feeBps: 0, minOrder: 1, maxOrder: 100000, sortOrder: 12, payoutPct: 85, enabled: true, pipSize: 0.00001, tradingHours: '24x7', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    { id: 'ast_egb', symbol: 'EUR/GBP', name: 'EUR/GBP (OTC)', category: 'CURRENCIES', basePrice: 0.8532, volatility: 0.0005, spread: 0.0002, feeBps: 0, minOrder: 1, maxOrder: 100000, sortOrder: 13, payoutPct: 86, enabled: true, pipSize: 0.00001, tradingHours: '24x7', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    { id: 'ast_ejp', symbol: 'EUR/JPY', name: 'EUR/JPY (OTC)', category: 'CURRENCIES', basePrice: 168.82, volatility: 0.0008, spread: 0.0002, feeBps: 0, minOrder: 1, maxOrder: 100000, sortOrder: 14, payoutPct: 89, enabled: true, pipSize: 0.001, tradingHours: '24x7', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    { id: 'ast_gjp', symbol: 'GBP/JPY', name: 'GBP/JPY (OTC)', category: 'CURRENCIES', basePrice: 197.88, volatility: 0.0009, spread: 0.0002, feeBps: 0, minOrder: 1, maxOrder: 100000, sortOrder: 15, payoutPct: 91, enabled: true, pipSize: 0.001, tradingHours: '24x7', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
   ];
 
   const initialRiskRule = {
@@ -172,9 +193,21 @@ function loadInitialStore(): DBStore {
     createdAt: new Date().toISOString(),
   };
 
-  return {
+  const adminLiveAccount = {
+    id: 'act_admin_live_2002',
+    userId: adminUser.id,
+    accountNumber: 'AX-LIVE-902184',
+    accountType: 'LIVE',
+    currency: 'USD',
+    balance: 10000,
+    status: 'ACTIVE',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  const defaultStore: DBStore = {
     users: [demoUser, adminUser],
-    accounts: [demoAccount, adminAccount],
+    accounts: [demoAccount, demoLiveAccount, adminAccount, adminLiveAccount],
     assets: initialAssets,
     binaryOptions: [],
     marketCandles: [],
@@ -190,6 +223,44 @@ function loadInitialStore(): DBStore {
     auditLogs: [],
     idempotencyKeys: [],
     sessions: [],
+  };
+
+  if (!loaded || typeof loaded !== 'object') {
+    return defaultStore;
+  }
+
+  // Merge loaded data with defaults to ensure admin, demo, and all collections exist
+  const mergedUsers = Array.isArray(loaded.users) ? [...loaded.users] : [demoUser, adminUser];
+  if (!mergedUsers.some((u: any) => u.username === 'admin' || u.email === 'admin@aurelix.trade')) {
+    mergedUsers.push(adminUser);
+  }
+  if (!mergedUsers.some((u: any) => u.username === 'demo' || u.email === 'demo@example.com')) {
+    mergedUsers.push(demoUser);
+  }
+
+  const mergedAccounts = Array.isArray(loaded.accounts) ? [...loaded.accounts] : [demoAccount, demoLiveAccount, adminAccount, adminLiveAccount];
+  if (!mergedAccounts.some((a: any) => a.userId === adminUser.id)) {
+    mergedAccounts.push(adminAccount, adminLiveAccount);
+  }
+
+  return {
+    users: mergedUsers,
+    accounts: mergedAccounts,
+    assets: Array.isArray(loaded.assets) && loaded.assets.length ? loaded.assets : initialAssets,
+    binaryOptions: Array.isArray(loaded.binaryOptions) ? loaded.binaryOptions : [],
+    marketCandles: Array.isArray(loaded.marketCandles) ? loaded.marketCandles : [],
+    orders: Array.isArray(loaded.orders) ? loaded.orders : [],
+    positions: Array.isArray(loaded.positions) ? loaded.positions : [],
+    trades: Array.isArray(loaded.trades) ? loaded.trades : [],
+    walletTransactions: Array.isArray(loaded.walletTransactions) ? loaded.walletTransactions : [initialTx],
+    deposits: Array.isArray(loaded.deposits) ? loaded.deposits : [],
+    withdrawals: Array.isArray(loaded.withdrawals) ? loaded.withdrawals : [],
+    riskRules: Array.isArray(loaded.riskRules) && loaded.riskRules.length ? loaded.riskRules : [initialRiskRule],
+    systemSettings: Array.isArray(loaded.systemSettings) && loaded.systemSettings.length ? loaded.systemSettings : initialSettings,
+    notifications: Array.isArray(loaded.notifications) ? loaded.notifications : [],
+    auditLogs: Array.isArray(loaded.auditLogs) ? loaded.auditLogs : [],
+    idempotencyKeys: Array.isArray(loaded.idempotencyKeys) ? loaded.idempotencyKeys : [],
+    sessions: Array.isArray(loaded.sessions) ? loaded.sessions : [],
   };
 }
 
@@ -212,11 +283,24 @@ function scheduleSave() {
 
 function matchFilter(item: any, where: any): boolean {
   if (!where || typeof where !== 'object') return true;
+  if (!item || typeof item !== 'object') return false;
+
+  // Support Prisma OR
+  if (Array.isArray(where.OR)) {
+    return where.OR.some((subWhere: any) => matchFilter(item, subWhere));
+  }
+
+  // Support Prisma AND
+  if (Array.isArray(where.AND)) {
+    return where.AND.every((subWhere: any) => matchFilter(item, subWhere));
+  }
+
   for (const [k, v] of Object.entries(where)) {
     if (v === undefined) continue;
+    if (k === 'OR' || k === 'AND' || k === 'NOT') continue;
     const itemVal = item[k];
     if (v === null) {
-      if (itemVal !== null) return false;
+      if (itemVal !== null && itemVal !== undefined) return false;
       continue;
     }
     if (typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date)) {
@@ -230,6 +314,14 @@ function matchFilter(item: any, where: any): boolean {
         const needle = String((v as any).contains).toLowerCase();
         const haystack = String(itemVal || '').toLowerCase();
         if (!haystack.includes(needle)) return false;
+      }
+      if ('equals' in v) {
+        const mode = (v as any).mode;
+        if (mode === 'insensitive') {
+          if (String(itemVal || '').toLowerCase() !== String((v as any).equals || '').toLowerCase()) return false;
+        } else {
+          if (itemVal !== (v as any).equals) return false;
+        }
       }
       if ('gte' in v) {
         if (new Date(itemVal) < new Date((v as any).gte)) return false;
@@ -246,7 +338,11 @@ function matchFilter(item: any, where: any): boolean {
     } else if (v instanceof Date) {
       if (new Date(itemVal).getTime() !== v.getTime()) return false;
     } else {
-      if (itemVal !== v) return false;
+      if (typeof itemVal === 'string' && typeof v === 'string') {
+        if (itemVal.toLowerCase() !== v.toLowerCase()) return false;
+      } else if (itemVal !== v) {
+        return false;
+      }
     }
   }
   return true;
@@ -276,28 +372,32 @@ function projectItem(item: any, select?: any, include?: any): any {
   let res = { ...item };
 
   // Handle relations
+  const assets = Array.isArray(store.assets) ? store.assets : [];
+  const accounts = Array.isArray(store.accounts) ? store.accounts : [];
+  const users = Array.isArray(store.users) ? store.users : [];
+
   if (include?.asset && res.assetId) {
-    res.asset = store.assets.find((a) => a.id === res.assetId);
+    res.asset = assets.find((a) => a.id === res.assetId);
   }
   if (include?.account && res.accountId) {
-    const acct = store.accounts.find((a) => a.id === res.accountId);
+    const acct = accounts.find((a) => a.id === res.accountId);
     if (acct) {
       res.account = { ...acct };
       if (include.account.include?.user && acct.userId) {
-        res.account.user = store.users.find((u) => u.id === acct.userId);
+        res.account.user = users.find((u) => u.id === acct.userId);
       }
     }
   }
   if (include?.user && res.userId) {
-    res.user = store.users.find((u) => u.id === res.userId);
+    res.user = users.find((u) => u.id === res.userId);
   }
   if (include?.accounts && res.id) {
-    res.accounts = store.accounts.filter((a) => a.userId === res.id);
+    res.accounts = accounts.filter((a) => a.userId === res.id);
   }
 
   // Handle _count
   if (select?._count?.select?.accounts) {
-    res._count = { accounts: store.accounts.filter((a) => a.userId === res.id).length };
+    res._count = { accounts: accounts.filter((a) => a.userId === res.id).length };
   }
 
   // Handle field selection
@@ -313,9 +413,16 @@ function projectItem(item: any, select?: any, include?: any): any {
 }
 
 function createModel(collectionName: keyof DBStore, idPrefix = 'c') {
+  const col = (): any[] => {
+    if (!Array.isArray((store as any)[collectionName])) {
+      (store as any)[collectionName] = [];
+    }
+    return (store as any)[collectionName];
+  };
+
   return {
     async findMany(args: any = {}) {
-      let items = (store[collectionName] as any[]).filter((item) => matchFilter(item, args.where));
+      let items = col().filter((item) => matchFilter(item, args.where));
       if (args.orderBy) items = sortItems(items, args.orderBy);
       if (args.skip) items = items.slice(args.skip);
       if (args.take) items = items.slice(0, args.take);
@@ -323,13 +430,13 @@ function createModel(collectionName: keyof DBStore, idPrefix = 'c') {
     },
 
     async findFirst(args: any = {}) {
-      const items = (store[collectionName] as any[]).filter((item) => matchFilter(item, args.where));
+      const items = col().filter((item) => matchFilter(item, args.where));
       const sorted = args.orderBy ? sortItems(items, args.orderBy) : items;
       return sorted[0] ? projectItem(sorted[0], args.select, args.include) : null;
     },
 
     async findUnique(args: any = {}) {
-      const item = (store[collectionName] as any[]).find((i) => matchFilter(i, args.where));
+      const item = col().find((i) => matchFilter(i, args.where));
       return item ? projectItem(item, args.select, args.include) : null;
     },
 
@@ -340,7 +447,7 @@ function createModel(collectionName: keyof DBStore, idPrefix = 'c') {
         updatedAt: new Date().toISOString(),
         ...args.data,
       };
-      (store[collectionName] as any[]).push(newItem);
+      col().push(newItem);
       scheduleSave();
       return projectItem(newItem, args.select, args.include);
     },
@@ -348,7 +455,7 @@ function createModel(collectionName: keyof DBStore, idPrefix = 'c') {
     async createMany(args: any) {
       const items = Array.isArray(args.data) ? args.data : [args.data];
       for (const d of items) {
-        (store[collectionName] as any[]).push({
+        col().push({
           id: d.id || genId(idPrefix),
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
@@ -360,27 +467,29 @@ function createModel(collectionName: keyof DBStore, idPrefix = 'c') {
     },
 
     async update(args: any) {
-      const idx = (store[collectionName] as any[]).findIndex((i) => matchFilter(i, args.where));
+      const list = col();
+      const idx = list.findIndex((i) => matchFilter(i, args.where));
       if (idx === -1) {
         throw new Error(`Record not found for update in ${collectionName}`);
       }
-      const existing = (store[collectionName] as any[])[idx];
+      const existing = list[idx];
       const updated = {
         ...existing,
         ...args.data,
         updatedAt: new Date().toISOString(),
       };
-      (store[collectionName] as any[])[idx] = updated;
+      list[idx] = updated;
       scheduleSave();
       return projectItem(updated, args.select, args.include);
     },
 
     async updateMany(args: any) {
+      const list = col();
       let count = 0;
-      for (let i = 0; i < (store[collectionName] as any[]).length; i++) {
-        if (matchFilter((store[collectionName] as any[])[i], args.where)) {
-          (store[collectionName] as any[])[i] = {
-            ...(store[collectionName] as any[])[i],
+      for (let i = 0; i < list.length; i++) {
+        if (matchFilter(list[i], args.where)) {
+          list[i] = {
+            ...list[i],
             ...args.data,
             updatedAt: new Date().toISOString(),
           };
@@ -392,15 +501,16 @@ function createModel(collectionName: keyof DBStore, idPrefix = 'c') {
     },
 
     async upsert(args: any) {
-      const idx = (store[collectionName] as any[]).findIndex((i) => matchFilter(i, args.where));
+      const list = col();
+      const idx = list.findIndex((i) => matchFilter(i, args.where));
       if (idx !== -1) {
-        const existing = (store[collectionName] as any[])[idx];
+        const existing = list[idx];
         const updated = {
           ...existing,
           ...args.update,
           updatedAt: new Date().toISOString(),
         };
-        (store[collectionName] as any[])[idx] = updated;
+        list[idx] = updated;
         scheduleSave();
         return projectItem(updated, args.select, args.include);
       } else {
@@ -410,20 +520,21 @@ function createModel(collectionName: keyof DBStore, idPrefix = 'c') {
           updatedAt: new Date().toISOString(),
           ...args.create,
         };
-        (store[collectionName] as any[]).push(newItem);
+        list.push(newItem);
         scheduleSave();
         return projectItem(newItem, args.select, args.include);
       }
     },
 
     async count(args: any = {}) {
-      return (store[collectionName] as any[]).filter((item) => matchFilter(item, args.where)).length;
+      return col().filter((item) => matchFilter(item, args.where)).length;
     },
 
     async delete(args: any) {
-      const idx = (store[collectionName] as any[]).findIndex((i) => matchFilter(i, args.where));
+      const list = col();
+      const idx = list.findIndex((i) => matchFilter(i, args.where));
       if (idx !== -1) {
-        const removed = (store[collectionName] as any[]).splice(idx, 1)[0];
+        const removed = list.splice(idx, 1)[0];
         scheduleSave();
         return removed;
       }
@@ -431,14 +542,15 @@ function createModel(collectionName: keyof DBStore, idPrefix = 'c') {
     },
 
     async deleteMany(args: any = {}) {
-      const initialLen = (store[collectionName] as any[]).length;
-      (store[collectionName] as any[]) = (store[collectionName] as any[]).filter((i) => !matchFilter(i, args.where));
+      const list = col();
+      const initialLen = list.length;
+      (store as any)[collectionName] = list.filter((i) => !matchFilter(i, args.where));
       scheduleSave();
-      return { count: initialLen - (store[collectionName] as any[]).length };
+      return { count: initialLen - (store as any)[collectionName].length };
     },
 
     async aggregate(args: any = {}) {
-      const items = (store[collectionName] as any[]).filter((item) => matchFilter(item, args.where));
+      const items = col().filter((item) => matchFilter(item, args.where));
       const _sum: Record<string, number> = {};
       if (args._sum && typeof args._sum === 'object') {
         for (const key of Object.keys(args._sum)) {

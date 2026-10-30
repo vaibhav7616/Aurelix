@@ -22,20 +22,26 @@ export function initSocket(httpServer: HttpServer): Server {
   io.use(async (socket: AuthedSocket, next) => {
     try {
       const token = (socket.handshake.auth?.token as string) || (socket.handshake.query?.token as string);
-      if (!token) return next(new Error('UNAUTHORIZED'));
-      const claims = verifyAccess(token);
-      const user = await prisma.user.findUnique({ where: { id: claims.sub }, select: { id: true, status: true } });
-      if (!user || user.status === 'SUSPENDED') return next(new Error('UNAUTHORIZED'));
-      socket.userId = user.id;
+      if (token) {
+        try {
+          const claims = verifyAccess(token);
+          const user = await prisma.user.findUnique({ where: { id: claims.sub }, select: { id: true, status: true } });
+          if (user && user.status !== 'SUSPENDED') {
+            socket.userId = user.id;
+          }
+        } catch {
+          // Token expired or invalid — allow as guest for market data
+        }
+      }
       next();
     } catch (e) {
-      next(new Error('UNAUTHORIZED'));
+      next();
     }
   });
 
   io.on('connection', (socket: AuthedSocket) => {
-    const uid = socket.userId!;
-    void socket.join(`user:${uid}`);
+    const uid = socket.userId;
+    if (uid) void socket.join(`user:${uid}`);
     logger.debug({ uid }, 'socket connected');
 
     socket.on('market:subscribe', (symbols: string[]) => {

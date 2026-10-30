@@ -40,7 +40,7 @@ async function startServer() {
     });
   }
 
-  const PORT = 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : (process.env.API_PORT ? parseInt(process.env.API_PORT, 10) : 3000);
   server.listen(PORT, '0.0.0.0', () => {
     logger.info(`Aurelix server listening on http://0.0.0.0:${PORT}`);
   });

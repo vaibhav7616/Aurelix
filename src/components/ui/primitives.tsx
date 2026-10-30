@@ -73,3 +73,13 @@ export function TableSkeleton({ rows = 5, cols }: { rows?: number; cols?: number
     </div>
   );
 }
+
+export function SectionTitle({ title, right }: { title: string; right?: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between mb-2.5">
+      <h2 className="text-[11px] font-bold uppercase tracking-[0.1em] text-slate-400">{title}</h2>
+      {right}
+    </div>
+  );
+}
+
