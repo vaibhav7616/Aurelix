@@ -1,6 +1,7 @@
 import { NavLink, Outlet, Link } from 'react-router-dom';
 import { Logo } from '../ui/primitives';
 import { useAuth } from '../../stores/authStore';
+import { useAppTheme } from '../../hooks/useAppTheme';
 
 const GROUPS: Array<{ title: string; items: Array<[string, string]> }> = [
   { title: 'Monitor', items: [['/admin', 'Dashboard'], ['/admin/market', 'Market engine']] },
@@ -11,6 +12,7 @@ const GROUPS: Array<{ title: string; items: Array<[string, string]> }> = [
 
 export function AdminShell() {
   const { user } = useAuth();
+  useAppTheme();
   return (
     <div className="min-h-screen bg-base-950">
       <header className="h-[52px] border-b border-line bg-base-900 flex items-center gap-3 px-4 sticky top-0 z-30">

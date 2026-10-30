@@ -177,17 +177,17 @@ export function AdminDeposits() {
             <tbody>{data.map((d) => (
               <tr key={d.id} className="ax-row">
                 <td className="ax-td text-fog">{d.user?.email}</td>
-                <td className="ax-td ax-num font-bold text-[#00c076]">{fmtMoney(d.amount)} <span className="text-mute text-[10px]">{d.currency}</span></td>
+                <td className="ax-td ax-num font-bold text-up">{fmtMoney(d.amount)} <span className="text-mute text-[10px]">{d.currency}</span></td>
                 <td className="ax-td"><span className="ax-tag">{d.provider.replace(/_/g, ' ')}</span></td>
-                <td className="ax-td font-mono text-[11px] text-slate-300 max-w-[180px] truncate" title={d.providerRef ?? ''}>{d.providerRef ?? '—'}</td>
+                <td className="ax-td font-mono text-[11px] text-fog max-w-[180px] truncate" title={d.providerRef ?? ''}>{d.providerRef ?? '—'}</td>
                 <td className="ax-td font-mono text-[11px] max-w-[220px] truncate" title={d.proofRef ?? ''}>{d.proofRef ? <span className="text-ink1 font-bold">{d.proofRef}</span> : <span className="text-mute">not submitted</span>}</td>
                 <td className="ax-td"><span className="ax-tag">{d.status}</span></td>
                 <td className="ax-td text-mute">{fmtTime(d.createdAt)}</td>
                 <td className="ax-td">
                   {d.status === 'PENDING' ? (
                     <div className="flex gap-1">
-                      <button onClick={() => handleApprove(d.id)} className="px-2 py-1 rounded bg-[#00c076] hover:bg-[#00d684] text-base-950 font-bold text-xs">Approve</button>
-                      <button onClick={() => handleReject(d.id)} className="px-2 py-1 rounded bg-red-500/20 hover:bg-red-500 text-red-400 hover:text-white font-bold text-xs">Reject</button>
+                      <button onClick={() => handleApprove(d.id)} className="px-2 py-1 rounded bg-up hover:bg-up text-base-950 font-bold text-xs">Approve</button>
+                      <button onClick={() => handleReject(d.id)} className="px-2 py-1 rounded bg-down/20 hover:bg-down text-down hover:text-cream font-bold text-xs">Reject</button>
                     </div>
                   ) : (
                     <span className="text-[11px] text-mute">—</span>

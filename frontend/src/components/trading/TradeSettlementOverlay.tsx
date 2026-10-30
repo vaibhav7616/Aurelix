@@ -14,10 +14,10 @@ function SettlementItem({ card, onDismiss }: { card: SettlementCard; onDismiss: 
   return (
     <div
       className={clsx(
-        'w-[320px] max-w-[calc(100vw-2rem)] rounded-xl overflow-hidden shadow-2xl backdrop-blur-xl border select-none transition-all duration-300 animate-in fade-in slide-in-from-top-3',
-        isWin && 'bg-[#111915]/95 border-emerald-500/40 shadow-[0_8px_30px_rgba(0,192,118,0.25)]',
-        isLoss && 'bg-[#1a1315]/95 border-rose-500/40 shadow-[0_8px_30px_rgba(255,84,71,0.22)]',
-        isTie && 'bg-[#161a22]/95 border-slate-700/60 shadow-[0_8px_25px_rgba(0,0,0,0.5)]'
+        'w-[320px] max-w-[calc(100vw-2rem)] rounded-md overflow-hidden shadow-pop backdrop-blur-xl border select-none transition-all duration-300 animate-in fade-in slide-in-from-top-3',
+        isWin && 'bg-base-950/95 border-up/40 shadow-[0_8px_30px_rgba(0,192,118,0.25)]',
+        isLoss && 'bg-base-950/95 border-down/40 shadow-[0_8px_30px_rgba(255,84,71,0.22)]',
+        isTie && 'bg-base-900/95 border-base-700/60 shadow-[0_8px_25px_rgba(0,0,0,0.5)]'
       )}
     >
       <div className="p-3">
@@ -25,16 +25,16 @@ function SettlementItem({ card, onDismiss }: { card: SettlementCard; onDismiss: 
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-1.5">
             <span className="text-sm leading-none">{meta.flag1}{meta.flag2}</span>
-            <span className="text-xs font-black text-white tracking-wide">{card.symbol}</span>
-            <span className="text-[9px] font-black text-amber-400 bg-amber-400/10 border border-amber-400/25 px-1 rounded leading-tight">
+            <span className="text-xs font-bold text-cream tracking-wide">{card.symbol}</span>
+            <span className="text-[9px] font-bold text-warn bg-warn/10 border border-warn/25 px-1 rounded leading-tight">
               OTC
             </span>
             <span
               className={clsx(
-                'text-[9px] font-black px-1.5 py-0.2 rounded tracking-wider flex items-center gap-0.5',
+                'text-[9px] font-bold px-1.5 py-0.2 rounded tracking-wider flex items-center gap-0.5',
                 isUp
-                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                  : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                  ? 'bg-up/15 text-up border border-up/30'
+                  : 'bg-down/15 text-down border border-down/30'
               )}
             >
               <span>{isUp ? '▲' : '▼'}</span>
@@ -44,7 +44,7 @@ function SettlementItem({ card, onDismiss }: { card: SettlementCard; onDismiss: 
 
           <button
             onClick={onDismiss}
-            className="w-5 h-5 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-[10px] text-slate-400 hover:text-white transition"
+            className="w-5 h-5 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-[10px] text-fog hover:text-cream transition"
             title="Dismiss"
           >
             ✕
@@ -54,15 +54,15 @@ function SettlementItem({ card, onDismiss }: { card: SettlementCard; onDismiss: 
         {/* Center: Large Outcome & Status Badge */}
         <div className="flex items-baseline justify-between mb-2">
           <div>
-            <div className="text-[9.5px] uppercase font-bold text-slate-400 tracking-wider">
+            <div className="text-[9.5px] uppercase font-bold text-fog tracking-wider">
               {isWin ? 'Net Profit' : isLoss ? 'Investment' : 'Stake Returned'}
             </div>
             <div
               className={clsx(
-                'text-xl font-black font-mono tracking-tight leading-tight',
-                isWin && 'text-[#00c076]',
-                isLoss && 'text-[#ff5447]',
-                isTie && 'text-slate-300'
+                'text-xl font-bold font-mono tracking-tight leading-tight',
+                isWin && 'text-up',
+                isLoss && 'text-down',
+                isTie && 'text-fog'
               )}
             >
               {isWin
@@ -75,10 +75,10 @@ function SettlementItem({ card, onDismiss }: { card: SettlementCard; onDismiss: 
 
           <div
             className={clsx(
-              'px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider',
-              isWin && 'bg-[#00c076]/20 text-[#00c076] border border-[#00c076]/35',
-              isLoss && 'bg-[#ff5447]/15 text-[#ff5447] border border-[#ff5447]/25',
-              isTie && 'bg-slate-700/40 text-slate-300 border border-slate-600/30'
+              'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider',
+              isWin && 'bg-up/20 text-up border border-up/35',
+              isLoss && 'bg-down/15 text-down border border-down/25',
+              isTie && 'bg-base-700/40 text-fog border border-mute/30'
             )}
           >
             {isWin ? `+${card.payoutPct || meta.defaultPayout}% WIN` : isLoss ? 'SETTLED' : 'TIE'}
@@ -86,11 +86,11 @@ function SettlementItem({ card, onDismiss }: { card: SettlementCard; onDismiss: 
         </div>
 
         {/* Bottom Details Row: Strike, Close, and Stake */}
-        <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 pt-1.5 border-t border-white/5">
-          <span>Strike: <span className="text-slate-200 font-semibold">{fmtPrice(card.entryPrice)}</span></span>
-          <span className="text-slate-600">→</span>
-          <span>Close: <span className="text-slate-200 font-semibold">{fmtPrice(card.closePrice)}</span></span>
-          <span>Invested: <span className="text-slate-200 font-semibold">{fmtMoney(card.stake)}</span></span>
+        <div className="flex items-center justify-between text-[10px] font-mono text-fog pt-1.5 border-t border-white/5">
+          <span>Strike: <span className="text-ink1 font-semibold">{fmtPrice(card.entryPrice)}</span></span>
+          <span className="text-mute">→</span>
+          <span>Close: <span className="text-ink1 font-semibold">{fmtPrice(card.closePrice)}</span></span>
+          <span>Invested: <span className="text-ink1 font-semibold">{fmtMoney(card.stake)}</span></span>
         </div>
       </div>
 
@@ -99,9 +99,9 @@ function SettlementItem({ card, onDismiss }: { card: SettlementCard; onDismiss: 
         <div
           className={clsx(
             'h-full origin-left',
-            isWin && 'bg-[#00c076]',
-            isLoss && 'bg-[#ff5447]',
-            isTie && 'bg-slate-400'
+            isWin && 'bg-up',
+            isLoss && 'bg-down',
+            isTie && 'bg-fog'
           )}
           style={{
             animation: 'shrinkProgress 4.5s linear forwards',

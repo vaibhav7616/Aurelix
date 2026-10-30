@@ -26,7 +26,9 @@ export function connectSocket(): Socket {
   startQuoteWatchdog();
 
   let wasConnected = false;
+  socket.on('disconnect', () => useTerminal.getState().setSocketConnected(false));
   socket.on('connect', () => {
+    useTerminal.getState().setSocketConnected(true);
     if (subscribed.length) socket?.emit('market:subscribe', subscribed);
     // reconnect: candles formed while offline are on the server — reload history instead of bridging flat bars
     if (wasConnected) void queryClient.invalidateQueries({ queryKey: ['candles'] });

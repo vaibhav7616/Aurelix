@@ -38,7 +38,7 @@ export function settleNote(t: OptionTrade): string | undefined {
 /** Ring countdown, Quotex-style. */
 function Ring({ frac, tone }: { frac: number; tone: 'up' | 'down' | 'flat' }) {
   const r = 9; const c = 2 * Math.PI * r;
-  const color = tone === 'up' ? '#3CB179' : tone === 'down' ? '#D4694E' : '#A9B5A4';
+  const color = tone === 'up' ? '#32A66A' : tone === 'down' ? '#D85C52' : '#A6B0A3';
   return (
     <svg width="24" height="24" viewBox="0 0 24 24" className="shrink-0 -rotate-90">
       <circle cx="12" cy="12" r={r} stroke="rgba(255,255,255,0.08)" strokeWidth="2.5" fill="none" />
@@ -129,7 +129,7 @@ export function PendingTradesList({ accountId }: { accountId?: string | null }) 
             </div>
             <div className="text-right">
               <div className="ax-num text-xs font-bold">{fmtMoney(p.stake)}</div>
-              <button onClick={() => cancel.mutate(p.id)} disabled={cancel.isPending} className="text-[10px] text-[#ff5447] hover:underline font-semibold mt-0.5">Cancel</button>
+              <button onClick={() => cancel.mutate(p.id)} disabled={cancel.isPending} className="text-[10px] text-down hover:underline font-semibold mt-0.5">Cancel</button>
             </div>
           </div>
         );
@@ -233,12 +233,12 @@ export function CompactTradeHistoryList({ accountId }: { accountId?: string | nu
   if (isLoading) return <TableSkeleton rows={3} cols={2} />;
   if (!data?.items.length) {
     return (
-      <div className="text-center py-8 px-4 text-slate-400">
-        <div className="mx-auto w-10 h-10 rounded-full bg-white/[0.05] border border-white/10 flex items-center justify-center text-slate-500 mb-2">
+      <div className="text-center py-8 px-4 text-fog">
+        <div className="mx-auto w-10 h-10 rounded-full bg-white/[0.05] border border-white/10 flex items-center justify-center text-mute mb-2">
           ◷
         </div>
-        <div className="text-xs font-semibold text-slate-300">No closed trades yet</div>
-        <div className="text-[11px] text-slate-500 mt-1">Finished trades will appear here with your profit and strike details.</div>
+        <div className="text-xs font-semibold text-fog">No closed trades yet</div>
+        <div className="text-[11px] text-mute mt-1">Finished trades will appear here with your profit and strike details.</div>
       </div>
     );
   }
@@ -257,21 +257,21 @@ export function CompactTradeHistoryList({ accountId }: { accountId?: string | nu
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
                 <span className="text-xs leading-none">{meta.flag1}{meta.flag2}</span>
-                <span className="text-xs font-bold text-white">{t.symbol}</span>
+                <span className="text-xs font-bold text-cream">{t.symbol}</span>
                 <span
                   className={clsx(
-                    'text-[9px] font-black px-1.5 py-0.2 rounded flex items-center gap-0.5',
-                    isUp ? 'text-[#00c076] bg-[#00c076]/15 border border-[#00c076]/30' : 'text-[#ff5447] bg-[#ff5447]/15 border border-[#ff5447]/30'
+                    'text-[9px] font-bold px-1.5 py-0.2 rounded flex items-center gap-0.5',
+                    isUp ? 'text-up bg-up/15 border border-up/30' : 'text-down bg-down/15 border border-down/30'
                   )}
                 >
                   {isUp ? '▲' : '▼'} {isUp ? 'CALL' : 'PUT'}
                 </span>
               </div>
-              <div className="text-[10px] text-slate-400 font-mono mt-1 flex items-center gap-1.5">
+              <div className="text-[10px] text-fog font-mono mt-1 flex items-center gap-1.5">
                 <span>{fmtPrice(t.entryPrice)}</span>
-                <span className="text-slate-600">→</span>
+                <span className="text-mute">→</span>
                 <span>{t.closePrice != null ? fmtPrice(t.closePrice) : '…'}</span>
-                <span className="text-slate-600">·</span>
+                <span className="text-mute">·</span>
                 <span>{fmtDur(t.durationSec)}</span>
               </div>
             </div>
@@ -280,12 +280,12 @@ export function CompactTradeHistoryList({ accountId }: { accountId?: string | nu
               <div
                 className={clsx(
                   'text-xs font-bold font-mono',
-                  isWin ? 'text-[#00c076]' : isTie ? 'text-slate-400' : 'text-[#ff5447]'
+                  isWin ? 'text-up' : isTie ? 'text-fog' : 'text-down'
                 )}
               >
                 {isWin ? `+${fmtMoney(profit)}` : isTie ? fmtMoney(t.stake) : `-${fmtMoney(t.stake)}`}
               </div>
-              <div className="text-[9.5px] text-slate-500 font-mono mt-0.5">
+              <div className="text-[9.5px] text-mute font-mono mt-0.5">
                 {t.settledAt ? new Date(t.settledAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''}
               </div>
             </div>
@@ -312,7 +312,7 @@ export function ClosedTradesList({ accountId }: { accountId?: string | null }) {
         return (
           <div key={t.id} title={settleNote(t)} className="px-3 py-2">
             <div className="flex items-center gap-1.5">
-              <span className={clsx('w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shrink-0', t.direction === 'UP' ? 'bg-up/15 text-up' : 'bg-down/15 text-down')}>{t.direction === 'UP' ? '↑' : '↓'}</span>
+              <span className={clsx('w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0', t.direction === 'UP' ? 'bg-up/15 text-up' : 'bg-down/15 text-down')}>{t.direction === 'UP' ? '↑' : '↓'}</span>
               <span className="text-xs font-bold">{t.symbol}</span>
               <span className="text-[10px] text-mute ax-num">{fmtDur(t.durationSec)}</span>
               <span className={clsx('ml-auto ax-num text-xs font-bold', p > 0 ? 'text-up' : p < 0 ? 'text-down' : 'text-fog')}>{p > 0 ? '+' : ''}{fmtMoney(p)}</span>

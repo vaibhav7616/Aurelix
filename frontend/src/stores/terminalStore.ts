@@ -22,6 +22,9 @@ interface TerminalState {
   setHoverDir: (d: 'UP' | 'DOWN' | null) => void;
   /** feed health: timestamp of the last quote received */
   lastQuoteAt: number;
+  /** real-time socket transport is up (quotes may still arrive via the HTTP fallback when it is down) */
+  socketConnected: boolean;
+  setSocketConnected: (v: boolean) => void;
   chartType: 'candles' | 'line' | 'area';
   accountId: string | null;
   ticks: Record<string, Tick>;
@@ -60,6 +63,8 @@ export const useTerminal = create<TerminalState>((set) => ({
   hoverDir: null,
   setHoverDir: (hoverDir) => set({ hoverDir }),
   lastQuoteAt: 0,
+  socketConnected: false,
+  setSocketConnected: (socketConnected) => set({ socketConnected }),
   chartType: 'candles',
   accountId: localStorage.getItem('ax_account'),
   ticks: {},

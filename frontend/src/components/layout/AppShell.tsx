@@ -11,6 +11,7 @@ import { connectSocket, subscribeMarket } from '../../services/socket';
 import { DEFAULT_SYMBOLS } from '../../lib/constants';
 import { fmtMoney } from '../../lib/format';
 import { soundService } from '../../lib/sound';
+import { useAppTheme } from '../../hooks/useAppTheme';
 
 interface Account { id: string; accountNumber: string; balance: number; lockedBalance?: number; equity: number; accountType: 'DEMO' | 'LIVE' }
 interface NotifResp { items: Array<{ id: string; title: string; message: string }>; unread: number }
@@ -48,7 +49,7 @@ function useOutside<T extends HTMLElement>(open: boolean, close: () => void) {
 
 function Dropdown({ open, className, children }: { open: boolean; className?: string; children: ReactNode }) {
   if (!open) return null;
-  return <div className={clsx('absolute top-[calc(100%+6px)] right-0 bg-base-850 border border-line rounded-xl shadow-pop z-50 overflow-hidden', className)}>{children}</div>;
+  return <div className={clsx('absolute top-[calc(100%+6px)] right-0 bg-base-850 border border-line rounded-md shadow-pop z-50 overflow-hidden', className)}>{children}</div>;
 }
 
 /** Quotex account switcher: "DEMO ACCOUNT / $10,000.00" pill with a list of accounts, refill and new demo account. */
@@ -84,11 +85,11 @@ function AccountSwitcher({ accounts, active, inrRate }: { accounts: Account[]; a
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="h-10 pl-3 pr-2 rounded-lg bg-base-800 hover:bg-base-700 border border-line flex items-center gap-2.5 transition"
+        aria-label="Switch trading account" aria-expanded={open} className="h-9 pl-3 pr-2 rounded-md bg-base-950 hover:bg-base-850 border border-line flex items-center gap-2.5 transition-colors"
       >
         <div className="text-left leading-tight">
-          <div className={clsx('text-[9px] font-extrabold uppercase tracking-[0.12em]', isDemo ? 'text-warn' : 'text-up')}>{isDemo ? 'Demo account' : 'Live account'}</div>
-          <div className="text-[14px] font-bold ax-num">
+          <div className={clsx('text-[9.5px] font-semibold uppercase tracking-[0.1em]', isDemo ? 'text-warn' : 'text-up')}>{isDemo ? 'Demo account' : 'Live account'}</div>
+          <div className="text-[13px] font-semibold ax-num">
             {active ? fmtMoney(active.balance) : '—'}
             {active && <span className="hidden sm:inline ml-1.5 text-[10px] font-semibold text-mute">({inr(active.balance)})</span>}
           </div>
@@ -101,17 +102,17 @@ function AccountSwitcher({ accounts, active, inrRate }: { accounts: Account[]; a
             const sel = a.id === active?.id;
             const demo = a.accountType !== 'LIVE';
             return (
-              <div key={a.id} className={clsx('rounded-lg border px-3 py-2.5 transition', sel ? 'border-accent-500/60 bg-accent-500/10' : 'border-transparent hover:bg-white/[0.04]')}>
+              <div key={a.id} className={clsx('rounded-md border px-3 py-2.5 transition-colors', sel ? 'border-accent-600/60 bg-base-800' : 'border-transparent hover:bg-base-850')}>
                 <button onClick={() => { setAccountId(a.id); setOpen(false); }} className="w-full flex items-center gap-2.5 text-left">
                   <span className={clsx('w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0', sel ? 'border-accent-500' : 'border-base-600')}>
                     {sel && <span className="w-2 h-2 rounded-full bg-accent-500" />}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className={clsx('block text-[9px] font-extrabold uppercase tracking-[0.12em]', demo ? 'text-warn' : 'text-up')}>{demo ? 'Demo account' : 'Live account'}</span>
+                    <span className={clsx('block text-[9.5px] font-semibold uppercase tracking-[0.1em]', demo ? 'text-warn' : 'text-up')}>{demo ? 'Demo account' : 'Live account'}</span>
                     <span className="block text-[11px] text-mute ax-num">#{a.accountNumber}</span>
                   </span>
                   <span className="text-right">
-                    <span className="block text-[14px] font-bold ax-num">{fmtMoney(a.balance)}</span>
+                    <span className="block text-[13px] font-semibold ax-num">{fmtMoney(a.balance)}</span>
                     <span className="block text-[10px] text-mute ax-num">{inr(a.balance)}</span>
                   </span>
                 </button>
@@ -162,7 +163,7 @@ function Bell() {
   });
   return (
     <div ref={ref} className="relative">
-      <button onClick={() => setOpen((v) => !v)} className="relative w-10 h-10 rounded-lg bg-base-800 hover:bg-base-700 border border-line flex items-center justify-center text-fog hover:text-ink1 transition" title="Notifications">
+      <button onClick={() => setOpen((v) => !v)} aria-label={`Notifications${data?.unread ? ` (${data.unread} unread)` : ''}`} aria-expanded={open} className="relative w-9 h-9 rounded-md hover:bg-base-800 flex items-center justify-center text-fog hover:text-ink1 transition-colors" title="Notifications">
         <Icon d="M6 9a6 6 0 0112 0c0 5 2 6 2 6H4s2-1 2-6M10 20a2 2 0 004 0" size={17} />
         {!!data?.unread && (
           <span className="absolute -top-1 -right-1 min-w-[17px] h-[17px] px-1 rounded-full bg-down text-cream text-[9px] font-bold flex items-center justify-center">
@@ -194,7 +195,7 @@ function ProfileMenu({ isAdmin }: { isAdmin: boolean }) {
   const go = (to: string) => { setOpen(false); nav(to); };
   return (
     <div ref={ref} className="relative">
-      <button onClick={() => setOpen((v) => !v)} className="w-10 h-10 rounded-full bg-accent-500/20 border-2 border-accent-500/50 text-accent-300 text-sm font-bold flex items-center justify-center hover:border-accent-400 transition">
+      <button onClick={() => setOpen((v) => !v)} aria-label="Account menu" aria-expanded={open} className="w-8 h-8 rounded-full bg-accent-700 border border-accent-600 text-accent-200 text-[12px] font-semibold flex items-center justify-center hover:border-accent-400 transition-colors">
         {(user?.firstName?.[0] ?? 'T').toUpperCase()}
       </button>
       <Dropdown open={open} className="w-[240px]">
@@ -220,6 +221,29 @@ function ProfileMenu({ isAdmin }: { isAdmin: boolean }) {
   );
 }
 
+/** Quote-feed status from what the client actually receives — never a hard-coded "live". */
+function FeedStatus() {
+  const socketUp = useTerminal((s) => s.socketConnected);
+  const lastQuoteAt = useTerminal((s) => s.lastQuoteAt);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
+  const age = lastQuoteAt ? now - lastQuoteAt : Infinity;
+  const fresh = age < 5000;
+  const state = fresh && socketUp ? 'live' : fresh ? 'polling' : lastQuoteAt ? 'stale' : 'connecting';
+  const meta = {
+    live: { label: 'Live', dot: 'bg-up', text: 'text-fog', hint: 'Streaming quotes' },
+    polling: { label: 'Delayed', dot: 'bg-warn', text: 'text-warn', hint: 'Real-time stream reconnecting — quotes refresh every second over HTTP' },
+    stale: { label: 'No quotes', dot: 'bg-down', text: 'text-down', hint: `Last quote ${Math.round(age / 1000)}s ago — trading may be paused` },
+    connecting: { label: 'Connecting', dot: 'bg-mute', text: 'text-mute', hint: 'Connecting to the market feed' },
+  }[state];
+  return (
+    <div role="status" aria-live="polite" title={meta.hint} className="hidden md:flex items-center gap-2 h-7 px-2.5 rounded-md border border-line text-[11px] font-medium">
+      <span className={clsx('w-1.5 h-1.5 rounded-full', meta.dot)} aria-hidden />
+      <span className={meta.text}>{meta.label}</span>
+    </div>
+  );
+}
+
 export function AppShell() {
   const { user } = useAuth();
   const nav = useNavigate();
@@ -233,11 +257,7 @@ export function AppShell() {
   });
   const inrRate = ratesData?.rates?.INR ?? 86.85;
 
-  // the signed-in app uses the Quotex-style palette; applied on <html> so portals and toasts follow it too
-  useEffect(() => {
-    document.documentElement.classList.add('theme-qx');
-    return () => document.documentElement.classList.remove('theme-qx');
-  }, []);
+  useAppTheme();
 
   useEffect(() => {
     connectSocket();
@@ -254,21 +274,22 @@ export function AppShell() {
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-base-950 text-ink1">
       {/* ── top bar ─────────────────────────────────── */}
-      <header className="h-[60px] shrink-0 border-b border-line bg-base-900 flex items-center gap-3 px-3 md:px-4 z-40">
-        <Link to="/trading" className="shrink-0"><Logo size={28} /></Link>
-        <div className="hidden lg:flex items-center gap-1.5 ml-3 px-2.5 h-7 rounded-full bg-up/10 border border-up/25">
-          <span className="w-1.5 h-1.5 rounded-full bg-up animate-pulse" />
-          <span className="text-[10px] font-bold tracking-[0.1em] text-up uppercase">Live quotes</span>
-        </div>
+      <header className="h-[52px] shrink-0 border-b border-line bg-base-900 flex items-center gap-3 px-3 md:px-4 z-40">
+        <Link to="/trading" className="shrink-0 flex items-center gap-2" aria-label="Aurelix — trading terminal">
+          <Logo size={24} />
+        </Link>
+        <span className="hidden lg:block w-px h-5 bg-line mx-1" aria-hidden />
+        <FeedStatus />
 
         <div className="ml-auto flex items-center gap-2">
           {accounts && <AccountSwitcher accounts={accounts} active={active} inrRate={inrRate} />}
-          <button onClick={() => nav('/wallet')} className="hidden sm:flex h-10 px-4 rounded-lg bg-up hover:brightness-110 text-white text-[13px] font-bold items-center gap-1.5 transition">
-            <span className="text-base leading-none">+</span> Deposit
+          <button onClick={() => nav('/wallet')} className="hidden sm:flex h-9 px-3.5 rounded-md bg-accent-600 hover:bg-accent-500 text-cream text-[12.5px] font-semibold items-center gap-1.5 transition">
+            <span className="text-[15px] leading-none" aria-hidden>+</span> Deposit
           </button>
-          <button onClick={() => nav('/wallet')} className="hidden md:flex h-10 px-4 rounded-lg bg-base-800 hover:bg-base-700 border border-line text-[13px] font-semibold items-center transition">
-            Withdrawal
+          <button onClick={() => nav('/wallet')} className="hidden md:flex h-9 px-3.5 rounded-md border border-line text-fog hover:text-ink1 hover:bg-base-800 text-[12.5px] font-semibold items-center transition">
+            Withdraw
           </button>
+          <span className="hidden sm:block w-px h-5 bg-line mx-0.5" aria-hidden />
           <Bell />
           <ProfileMenu isAdmin={isAdmin} />
         </div>
@@ -276,33 +297,35 @@ export function AppShell() {
 
       <div className="flex-1 flex min-h-0">
         {/* ── left sidebar ─────────────────────────────── */}
-        <aside className="hidden md:flex w-[76px] shrink-0 flex-col items-center py-2 gap-0.5 border-r border-line bg-base-900">
+        <nav aria-label="Main" className="hidden md:flex w-[68px] shrink-0 flex-col items-center py-2 gap-0.5 border-r border-line bg-base-900">
           {RAIL.map(([to, label, d]) => (
             <NavLink
               key={to}
               to={to}
               className={({ isActive }) => clsx(
-                'relative w-[64px] h-[58px] rounded-lg flex flex-col items-center justify-center gap-1 transition',
-                isActive ? 'text-ink1 bg-white/[0.06] before:absolute before:-left-1.5 before:top-3 before:bottom-3 before:w-[3px] before:rounded-r before:bg-accent-500' : 'text-mute hover:text-ink1 hover:bg-white/[0.04]',
+                'relative w-[58px] h-[54px] rounded-md flex flex-col items-center justify-center gap-1 transition-colors',
+                isActive
+                  ? 'text-ink1 bg-base-800 before:absolute before:-left-[5px] before:top-3 before:bottom-3 before:w-[2px] before:rounded-full before:bg-accent-400'
+                  : 'text-mute hover:text-ink1 hover:bg-base-850',
               )}
             >
-              <Icon d={d} />
-              <span className="text-[10px] font-semibold">{label}</span>
+              <Icon d={d} size={18} />
+              <span className="text-[10px] font-medium leading-none">{label}</span>
             </NavLink>
           ))}
-          <div className="mt-auto flex flex-col items-center gap-1">
+          <div className="mt-auto flex flex-col items-center gap-0.5">
             {isAdmin && (
-              <NavLink to="/admin" title="Control deck" className="w-[64px] h-[50px] rounded-lg flex flex-col items-center justify-center gap-0.5 text-warn hover:bg-warn/10">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 7.6L22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z" /></svg>
-                <span className="text-[9px] font-semibold">Admin</span>
+              <NavLink to="/admin" title="Control deck" className="w-[58px] h-[48px] rounded-md flex flex-col items-center justify-center gap-1 text-warn hover:bg-base-850 transition-colors">
+                <Icon d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z" size={17} />
+                <span className="text-[10px] font-medium leading-none">Admin</span>
               </NavLink>
             )}
-            <NavLink to="/more" className={({ isActive }) => clsx('w-[64px] h-[50px] rounded-lg flex flex-col items-center justify-center gap-0.5', isActive ? 'text-ink1 bg-white/[0.06]' : 'text-mute hover:text-ink1 hover:bg-white/[0.04]')}>
-              <Icon d="M5 12h.01M12 12h.01M19 12h.01" />
-              <span className="text-[9px] font-semibold">More</span>
+            <NavLink to="/more" className={({ isActive }) => clsx('w-[58px] h-[48px] rounded-md flex flex-col items-center justify-center gap-1 transition-colors', isActive ? 'text-ink1 bg-base-800' : 'text-mute hover:text-ink1 hover:bg-base-850')}>
+              <Icon d="M5 12h.01M12 12h.01M19 12h.01" size={18} />
+              <span className="text-[10px] font-medium leading-none">More</span>
             </NavLink>
           </div>
-        </aside>
+        </nav>
 
         <main className="flex-1 min-w-0 overflow-y-auto pb-16 md:pb-0">
           <Outlet />

@@ -13,16 +13,45 @@
 }
 
 /* Signed-in app: Quotex-style navy terminal with blue accent, green up / red down. */
-.theme-qx {
-  --c-base-950: 18 22 32; --c-base-900: 22 26 37; --c-base-850: 30 36 50; --c-base-800: 34 41 56; --c-base-700: 46 54 72; --c-base-600: 64 74 96;
-  --c-accent-200: 204 228 255; --c-accent-300: 102 176 255; --c-accent-400: 51 149 255; --c-accent-500: 0 122 255; --c-accent-600: 0 105 219; --c-accent-700: 0 82 171;
-  --c-cream: 255 255 255;
-  --c-up: 0 192 118; --c-updim: 10 58 42; --c-down: 255 84 71; --c-downdim: 66 26 26; --c-warn: 234 179 8;
-  --c-fog: 164 174 194; --c-mute: 112 122 145; --c-ink1: 236 240 247; --c-line: 40 46 62;
+/* ── Signed-in application palette ────────────────────────────────────────────────────────
+   Applied by AppShell/AdminShell on <html> (class added on mount, removed on unmount), so
+   nothing here can reach the public website. Same forest/cream family as the site, tuned
+   for dense data: darker canvas, calmer surfaces, restrained green/red signals. */
+.theme-app {
+  --c-base-950: 16 22 16;   /* #101610 canvas */
+  --c-base-900: 23 31 24;   /* #171F18 panels */
+  --c-base-850: 28 38 31;   /* #1C261F raised */
+  --c-base-800: 34 45 37;   /* #222D25 controls */
+  --c-base-700: 44 56 47;   /* #2C382F hover / selected */
+  --c-base-600: 62 77 65;
+  --c-accent-200: 205 228 211; --c-accent-300: 140 196 158; --c-accent-400: 50 166 106; --c-accent-500: 41 138 88; --c-accent-600: 38 115 77; --c-accent-700: 23 61 43;
+  --c-cream: 246 241 228;
+  --c-up: 50 166 106;  --c-updim: 23 61 43;    /* #32A66A / #173D2B */
+  --c-down: 216 92 82; --c-downdim: 67 37 34;  /* #D85C52 / #432522 */
+  --c-warn: 198 168 106;                        /* #C6A86A */
+  --c-fog: 166 176 163; --c-mute: 119 132 119; --c-ink1: 233 229 213; --c-line: 44 56 47;
+  --app-radius: 6px;
 }
-.theme-qx, .theme-qx * { scrollbar-color: #2e3648 transparent; }
-.theme-qx .font-display { font-family: Inter, system-ui, sans-serif; font-weight: 700; }
-.theme-qx *::-webkit-scrollbar-thumb { background: #2e3648; }
+.theme-app body { background-image: none; letter-spacing: -0.003em; }
+.theme-app, .theme-app * { scrollbar-color: #2C382F transparent; }
+.theme-app *::-webkit-scrollbar-thumb { background: #2C382F; }
+.theme-app *::-webkit-scrollbar-thumb:hover { background: #3E4D41; }
+/* dense data uses the sans; the serif stays for page titles only */
+.theme-app .font-display { font-family: Fraunces, Georgia, serif; font-weight: 500; letter-spacing: -0.01em; }
+.theme-app :focus-visible { outline: 2px solid rgb(var(--c-accent-400)); outline-offset: 1px; }
+.theme-app ::selection { background: rgba(50, 166, 106, 0.3); }
+
+/* component refinements, scoped to the app (public pages keep the originals) */
+.theme-app .ax-panel { border-radius: var(--app-radius); box-shadow: none; }
+.theme-app .ax-raised, .theme-app .ax-well { border-radius: var(--app-radius); }
+.theme-app .ax-th { background: rgb(var(--c-base-900)); color: rgb(var(--c-mute)); font-size: 10.5px; letter-spacing: 0.06em; padding: 9px 12px; }
+.theme-app .ax-td { padding: 8px 12px; border-color: rgb(var(--c-line) / 0.7); font-variant-numeric: tabular-nums; }
+.theme-app .ax-row:hover { background: rgb(var(--c-base-850)); }
+.theme-app .ax-input { background: rgb(var(--c-base-950)); border-radius: var(--app-radius); }
+.theme-app .ax-btn { border-radius: var(--app-radius); }
+.theme-app .ax-tag { background: rgb(var(--c-base-800)); color: rgb(var(--c-fog)); border-radius: 4px; }
+.theme-app .shadow-pop { box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.55); }
+
 html, body, #root { height: 100%; }
 body {
   @apply bg-base-950 text-ink1 font-sans antialiased;

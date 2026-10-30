@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -21,22 +22,22 @@ type DrawType = 'trend' | 'hline' | 'support' | 'resistance' | 'fibonacci';
 interface Drawing { id: string; type: DrawType; t1: number; p1: number; t2?: number; p2?: number }
 
 const FIB_LEVELS = [
-  { pct: 0, label: '0.0%', color: '#94a3b8' },
-  { pct: 0.236, label: '23.6%', color: '#f59e0b' },
-  { pct: 0.382, label: '38.2%', color: '#10b981' },
-  { pct: 0.5, label: '50.0%', color: '#06b6d4' },
-  { pct: 0.618, label: '61.8%', color: '#eab308' },
+  { pct: 0, label: '0.0%', color: '#A6B0A3' },
+  { pct: 0.236, label: '23.6%', color: '#C6A86A' },
+  { pct: 0.382, label: '38.2%', color: '#32A66A' },
+  { pct: 0.5, label: '50.0%', color: '#32A66A' },
+  { pct: 0.618, label: '61.8%', color: '#C6A86A' },
   { pct: 0.786, label: '78.6%', color: '#ec4899' },
   { pct: 1.0, label: '100.0%', color: '#8b5cf6' },
 ];
 
 // Quotex official binary candle colors (matched to platform screenshot)
-const UP = '#0faf59';
-const DOWN = '#ea4d4d';
-const DN_FILL = '#ea4d4d';
-const ACC = '#0faf59';
+const UP = '#32A66A';
+const DOWN = '#D85C52';
+const DN_FILL = '#D85C52';
+const ACC = '#32A66A';
 const GRID = 'rgba(255, 255, 255, 0.04)';
-const TEXT = '#94a3b8';
+const TEXT = '#A6B0A3';
 
 export function tfToMs(tf: string): number {
   switch (tf) {
@@ -293,7 +294,8 @@ function fmtTradeCountdown(sec: number): string {
   return `${String(m).padStart(2, '0')}:${String(remS).padStart(2, '0')}`;
 }
 
-export function PriceChart() {
+/** `toolbar`: extra controls rendered in the chart's top-left row (kept in one row so nothing overlaps). */
+export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
   const symbol = useTerminal((s) => s.symbol);
   const timeframe = useTerminal((s) => s.timeframe);
   const chartType = useTerminal((s) => s.chartType);
@@ -440,7 +442,7 @@ export function PriceChart() {
     if (!elRef.current) return;
     const chart = createChart(elRef.current, {
       layout: {
-        background: { type: ColorType.Solid, color: '#121620' },
+        background: { type: ColorType.Solid, color: '#101610' },
         textColor: TEXT,
         fontSize: 10,
         fontFamily: '"JetBrains Mono", monospace',
@@ -452,8 +454,8 @@ export function PriceChart() {
       },
       crosshair: {
         mode: CrosshairMode.Normal,
-        vertLine: { color: 'rgba(255,255,255,0.2)', style: LineStyle.Dashed, labelBackgroundColor: '#1e293b' },
-        horzLine: { color: 'rgba(255,255,255,0.2)', style: LineStyle.Dashed, labelBackgroundColor: '#007aff' },
+        vertLine: { color: 'rgba(255,255,255,0.2)', style: LineStyle.Dashed, labelBackgroundColor: '#222D25' },
+        horzLine: { color: 'rgba(255,255,255,0.2)', style: LineStyle.Dashed, labelBackgroundColor: '#32A66A' },
       },
       rightPriceScale: {
         borderColor: 'rgba(255,255,255,0.08)',
@@ -529,7 +531,7 @@ export function PriceChart() {
       mainRef.current = s as never;
     } else if (chartType === 'line') {
       const s = chart.addLineSeries({
-        color: '#007aff',
+        color: '#32A66A',
         lineWidth: 2,
         priceLineVisible: false,
         lastValueVisible: false,
@@ -571,24 +573,24 @@ export function PriceChart() {
       s.setData(pts);
       indRefs.current.push({ s, kind });
     };
-    if (inds.sma20) addOverlay(sma(closes, 20), '#00c076', 'sma20');
-    if (inds.sma50) addOverlay(sma(closes, 50), '#eab308', 'sma50');
-    if (inds.ema20) addOverlay(ema(closes, 20), '#38bdf8', 'ema20');
+    if (inds.sma20) addOverlay(sma(closes, 20), '#32A66A', 'sma20');
+    if (inds.sma50) addOverlay(sma(closes, 50), '#C6A86A', 'sma50');
+    if (inds.ema20) addOverlay(ema(closes, 20), '#32A66A', 'ema20');
     if (inds.bb) {
       const bb = bollinger(closes);
-      addOverlay(bb.map((b) => (b ? b.up : null)), '#64748b', 'bbUp', 1, LineStyle.Dashed);
-      addOverlay(bb.map((b) => (b ? b.mid : null)), '#64748b', 'bbMid', 1, LineStyle.Dotted);
-      addOverlay(bb.map((b) => (b ? b.lo : null)), '#64748b', 'bbLo', 1, LineStyle.Dashed);
+      addOverlay(bb.map((b) => (b ? b.up : null)), '#778477', 'bbUp', 1, LineStyle.Dashed);
+      addOverlay(bb.map((b) => (b ? b.mid : null)), '#778477', 'bbMid', 1, LineStyle.Dotted);
+      addOverlay(bb.map((b) => (b ? b.lo : null)), '#778477', 'bbLo', 1, LineStyle.Dashed);
     }
     if (inds.sar) {
-      addOverlay(parabolicSar(candles), '#38bdf8', 'sar', 1, LineStyle.Dotted);
+      addOverlay(parabolicSar(candles), '#32A66A', 'sar', 1, LineStyle.Dotted);
     }
     if (inds.supertrend) {
       const st = supertrend(candles);
       const stUp = st.map((s) => (s && s.dir === 'up' ? s.val : null));
       const stDown = st.map((s) => (s && s.dir === 'down' ? s.val : null));
-      addOverlay(stUp, '#00c076', 'stUp', 2);
-      addOverlay(stDown, '#ff5447', 'stDown', 2);
+      addOverlay(stUp, '#32A66A', 'stUp', 2);
+      addOverlay(stDown, '#D85C52', 'stDown', 2);
     }
 
     // Oscillator pane
@@ -602,7 +604,7 @@ export function PriceChart() {
           oscRefs.current.push(s);
         };
         mk(70); mk(50); mk(30);
-        const s = chart.addLineSeries({ color: '#eab308', lineWidth: 1, priceScaleId: 'osc', priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+        const s = chart.addLineSeries({ color: '#C6A86A', lineWidth: 1, priceScaleId: 'osc', priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
         const pts: Array<{ time: Time; value: number }> = [];
         vals.forEach((v, i) => { if (v !== null) pts.push({ time: times[i], value: v }); });
         s.setData(pts);
@@ -615,8 +617,8 @@ export function PriceChart() {
           oscRefs.current.push(s);
         };
         mk(80); mk(50); mk(20);
-        const kSeries = chart.addLineSeries({ color: '#00c076', lineWidth: 2, priceScaleId: 'osc', priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-        const dSeries = chart.addLineSeries({ color: '#ff5447', lineWidth: 2, lineStyle: LineStyle.Dashed, priceScaleId: 'osc', priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+        const kSeries = chart.addLineSeries({ color: '#32A66A', lineWidth: 2, priceScaleId: 'osc', priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+        const dSeries = chart.addLineSeries({ color: '#D85C52', lineWidth: 2, lineStyle: LineStyle.Dashed, priceScaleId: 'osc', priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
         const kPts: Array<{ time: Time; value: number }> = [];
         const dPts: Array<{ time: Time; value: number }> = [];
         vals.forEach((v, i) => {
@@ -634,9 +636,9 @@ export function PriceChart() {
         const hPts: Array<{ time: Time; value: number; color: string }> = [];
         vals.forEach((v, i) => { if (v !== null) hPts.push({ time: times[i], value: v.h, color: v.h >= 0 ? 'rgba(0,192,118,0.55)' : 'rgba(255,84,71,0.55)' }); });
         h.setData(hPts);
-        const m = chart.addLineSeries({ color: '#00c076', lineWidth: 1, priceScaleId: 'osc', priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+        const m = chart.addLineSeries({ color: '#32A66A', lineWidth: 1, priceScaleId: 'osc', priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
         m.setData(vals.map((v, i) => (v ? { time: times[i], value: v.m } : null)).filter(Boolean) as Array<{ time: Time; value: number }>);
-        const g = chart.addLineSeries({ color: '#ff5447', lineWidth: 1, priceScaleId: 'osc', priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+        const g = chart.addLineSeries({ color: '#D85C52', lineWidth: 1, priceScaleId: 'osc', priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
         g.setData(vals.map((v, i) => (v ? { time: times[i], value: v.s } : null)).filter(Boolean) as Array<{ time: Time; value: number }>);
         oscRefs.current.push(h as never, m, g);
       }
@@ -949,7 +951,7 @@ export function PriceChart() {
           if (glowDotRef.current) {
             glowDotRef.current.style.transform = `translate3d(${activeX}px, ${y}px, 0)`;
             const isBull = curPrice >= (activeCandleRef.current?.open ?? curPrice);
-            const dotCol = isBull ? '#00c076' : '#ff5447';
+            const dotCol = isBull ? '#32A66A' : '#D85C52';
             if (glowDotCoreRef.current) glowDotCoreRef.current.setAttribute('fill', dotCol);
             if (glowDotWaveRef.current) glowDotWaveRef.current.setAttribute('fill', dotCol);
           }
@@ -972,9 +974,9 @@ export function PriceChart() {
           if (pricePillInnerRef.current) {
             const timeSinceTick = performance.now() - lastTickTimeRef.current;
             if (timeSinceTick < 280 && lastTickDirRef.current) {
-              pricePillInnerRef.current.style.backgroundColor = lastTickDirRef.current === 'up' ? '#00c076' : '#ff5447';
+              pricePillInnerRef.current.style.backgroundColor = lastTickDirRef.current === 'up' ? '#32A66A' : '#D85C52';
             } else {
-              pricePillInnerRef.current.style.backgroundColor = '#007aff';
+              pricePillInnerRef.current.style.backgroundColor = '#32A66A';
             }
           }
         }
@@ -988,9 +990,9 @@ export function PriceChart() {
         if (countdownTextRef.current) {
           countdownTextRef.current.textContent = formatCountdown(secLeft);
           if (secLeft <= 5) {
-            countdownTextRef.current.className = 'text-amber-400 font-black animate-pulse';
+            countdownTextRef.current.className = 'text-warn font-bold animate-pulse';
           } else {
-            countdownTextRef.current.className = 'text-white font-bold';
+            countdownTextRef.current.className = 'text-cream font-bold';
           }
         }
 
@@ -1206,7 +1208,7 @@ export function PriceChart() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symTrades.length, timeframe, rev, clock, hoverDir, previewExpiry, pendingDurationSec]);
 
-  const drawColor = (type: DrawType) => (type === 'support' ? UP : type === 'resistance' ? DOWN : type === 'trend' ? ACC : '#7A8776');
+  const drawColor = (type: DrawType) => (type === 'support' ? UP : type === 'resistance' ? DOWN : type === 'trend' ? ACC : '#778477');
 
   const [showTfMenu, setShowTfMenu] = useState(false);
   const [showTypeMenu, setShowTypeMenu] = useState(false);
@@ -1274,37 +1276,34 @@ export function PriceChart() {
   const assetInfo = getAssetMeta(symbol);
 
   return (
-    <div ref={wrapRef} className={clsx('relative h-full w-full bg-[#121620] overflow-hidden select-none', tool !== 'select' && 'draw-active', isFull && 'p-2')}>
-      {/* Aurelix centered watermark */}
-      <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none z-0">
-        <span className="text-[120px] font-black tracking-[0.2em] text-white/[0.035] select-none">AURELIX</span>
-      </div>
-
+    <div ref={wrapRef} className={clsx('relative h-full w-full bg-base-950 overflow-hidden select-none', tool !== 'select' && 'draw-active', isFull && 'p-2')}>
       {/* Lightweight-charts container */}
       <div ref={elRef} className="absolute inset-0 z-[1]" />
 
       {/* Quotex Top Subheader: Live UTC clock + PAIR INFORMATION */}
-      <div className="absolute top-3 left-3 z-10 flex items-center gap-3 pointer-events-auto">
-        <span className="text-[11px] font-mono font-bold text-slate-300 bg-base-900/80 px-2 py-0.5 rounded border border-white/10 backdrop-blur-sm">
-          {utcClock || '00:00:00 UTC'}
+      <div className="absolute top-3 left-3 z-30 flex items-center gap-1.5 pointer-events-auto">
+        {toolbar}
+        <span className="hidden sm:flex h-8 px-2.5 items-center text-[11.5px] ax-num text-fog bg-base-900/95 rounded-md border border-line" title="Server time (UTC) — trades settle on this clock">
+          {utcClock || '—'}
         </span>
         <button
           onClick={() => setShowPairInfo(true)}
-          className="flex items-center gap-1 text-[11px] font-bold text-[#007aff] hover:text-[#38bdf8] bg-[#007aff]/10 hover:bg-[#007aff]/20 px-2.5 py-0.5 rounded-full border border-[#007aff]/20 transition"
+          aria-label="Instrument info"
+          className="h-8 px-2.5 flex items-center gap-1.5 text-[12px] font-medium text-fog hover:text-ink1 bg-base-900/95 hover:bg-base-800 rounded-md border border-line transition-colors"
         >
-          <span>ℹ</span>
-          <span>PAIR INFORMATION</span>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></svg>
+          <span className="hidden sm:inline">Instrument info</span>
         </button>
       </div>
 
       {/* Trader sentiment: share of Up vs Down trades on this asset over the last 30 min (server) */}
-      <div title={sentiment?.samples ? `${sentiment.samples} trades in the last 30 min` : 'No recent trades — neutral'} className="absolute left-2.5 top-1/2 -translate-y-1/2 z-10 flex flex-col items-center bg-[#171c26]/90 border border-white/10 rounded-md py-1.5 px-1 shadow-lg select-none">
-        <span className="text-[9.5px] font-black text-[#00c076] leading-none mb-1">{upPct}%</span>
+      <div title={sentiment?.samples ? `${sentiment.samples} trades in the last 30 min` : 'No recent trades — neutral'} className="absolute left-2.5 top-1/2 -translate-y-1/2 z-10 flex flex-col items-center bg-base-900/90 border border-white/10 rounded-md py-1.5 px-1 shadow-lg select-none">
+        <span className="text-[9.5px] font-bold text-up leading-none mb-1">{upPct}%</span>
         <div className="w-1.5 h-28 rounded-full bg-base-800 flex flex-col overflow-hidden">
-          <div className="w-full bg-[#00c076] transition-all duration-700" style={{ height: `${upPct}%` }} />
-          <div className="w-full bg-[#ff5447] transition-all duration-700" style={{ height: `${100 - upPct}%` }} />
+          <div className="w-full bg-up transition-all duration-700" style={{ height: `${upPct}%` }} />
+          <div className="w-full bg-down transition-all duration-700" style={{ height: `${100 - upPct}%` }} />
         </div>
-        <span className="text-[9.5px] font-black text-[#ff5447] leading-none mt-1">{100 - upPct}%</span>
+        <span className="text-[9.5px] font-bold text-down leading-none mt-1">{100 - upPct}%</span>
       </div>
 
       {/* Drawing Overlay */}
@@ -1317,9 +1316,9 @@ export function PriceChart() {
             return (
               <g key={g.id}>
                 {/* Diagonal anchor line */}
-                <line x1={g.x1} y1={g.y1} x2={g.x2} y2={g.y2} stroke="#38bdf8" strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
-                <circle cx={g.x1} cy={g.y1} r={3} fill="#38bdf8" />
-                <circle cx={g.x2} cy={g.y2} r={3} fill="#38bdf8" />
+                <line x1={g.x1} y1={g.y1} x2={g.x2} y2={g.y2} stroke="#32A66A" strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
+                <circle cx={g.x1} cy={g.y1} r={3} fill="#32A66A" />
+                <circle cx={g.x2} cy={g.y2} r={3} fill="#32A66A" />
                 {FIB_LEVELS.map((fib) => {
                   const y = g.y1 + dy * fib.pct;
                   return (
@@ -1354,18 +1353,18 @@ export function PriceChart() {
             const { x1, x2 } = projectedTradeLines;
             return (
               <g>
-                <rect x={Math.min(x1, x2)} y={0} width={Math.abs(x2 - x1)} height={H} fill={hoverDir === 'UP' ? '#00c076' : hoverDir === 'DOWN' ? '#ff5447' : '#ffffff'} opacity={hoverDir ? 0.1 : 0.02} />
+                <rect x={Math.min(x1, x2)} y={0} width={Math.abs(x2 - x1)} height={H} fill={hoverDir === 'UP' ? '#32A66A' : hoverDir === 'DOWN' ? '#D85C52' : '#ffffff'} opacity={hoverDir ? 0.1 : 0.02} />
                 {/* Beginning of trade line */}
                 <line x1={x1} y1={0} x2={x1} y2={H} stroke="#ffffff" strokeWidth={1} strokeDasharray="3 3" opacity={0.4} />
-                <text x={x1 - 4} y={32} textAnchor="end" fill="#cbd5e1" fontSize={9.5} fontFamily="Inter, system-ui" fontWeight={600} opacity={0.85}>
+                <text x={x1 - 4} y={62} textAnchor="end" fill="#A6B0A3" fontSize={9.5} fontFamily="Inter, system-ui" fontWeight={600} opacity={0.85}>
                   Beginning of trade ▸
                 </text>
                 {/* End of trade line */}
-                <line x1={x2} y1={0} x2={x2} y2={H} stroke="#ff5447" strokeWidth={1.25} strokeDasharray="3 3" opacity={0.7} />
-                <g transform={`translate(${Math.max(10, x2 - 38)}, 14)`}>
-                  <rect width={76} height={18} rx={4} fill="#ea4d4d" opacity={0.9} />
-                  <text x={38} y={12.5} textAnchor="middle" fill="#ffffff" fontSize={9.5} fontWeight={900} fontFamily="Inter, system-ui" letterSpacing="0.05em">
-                    EXPIRATION
+                <line x1={x2} y1={0} x2={x2} y2={H} stroke="#A6B0A3" strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
+                <g transform={`translate(${Math.max(10, x2 - 34)}, 46)`}>
+                  <rect width={68} height={18} rx={3} fill="#222D25" stroke="#3E4D41" />
+                  <text x={34} y={12.5} textAnchor="middle" fill="#E9E5D5" fontSize={9.5} fontWeight={600} fontFamily="Inter, system-ui" letterSpacing="0.04em">
+                    Expiry
                   </text>
                 </g>
               </g>
@@ -1379,21 +1378,21 @@ export function PriceChart() {
         <svg className="absolute inset-0 w-full h-full z-[6] pointer-events-none overflow-hidden">
           <defs>
             <filter id="qxTradeGlowGreen" x="-20%" y="-40%" width="140%" height="180%">
-              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#00c076" floodOpacity="0.75" />
+              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#32A66A" floodOpacity="0.75" />
             </filter>
             <filter id="qxTradeGlowRed" x="-20%" y="-40%" width="140%" height="180%">
-              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#ff5447" floodOpacity="0.75" />
+              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#D85C52" floodOpacity="0.75" />
             </filter>
             <filter id="qxPillShadow" x="-20%" y="-20%" width="140%" height="140%">
               <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="#000000" floodOpacity="0.65" />
             </filter>
             <linearGradient id="qxItmWinGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#00c076" stopOpacity="0.25" />
-              <stop offset="100%" stopColor="#00c076" stopOpacity="0.04" />
+              <stop offset="0%" stopColor="#32A66A" stopOpacity="0.25" />
+              <stop offset="100%" stopColor="#32A66A" stopOpacity="0.04" />
             </linearGradient>
             <linearGradient id="qxOtmLossGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#ff5447" stopOpacity="0.25" />
-              <stop offset="100%" stopColor="#ff5447" stopOpacity="0.04" />
+              <stop offset="0%" stopColor="#D85C52" stopOpacity="0.25" />
+              <stop offset="100%" stopColor="#D85C52" stopOpacity="0.04" />
             </linearGradient>
           </defs>
 
@@ -1401,8 +1400,8 @@ export function PriceChart() {
             const H = elRef.current?.clientHeight ?? 500;
             const W = elRef.current?.clientWidth ?? 800;
             const priceScaleW = 58;
-            const dirCol = g.t.direction === 'UP' ? '#00c076' : '#ff5447';
-            const outcomeCol = g.isWinning ? '#00c076' : g.isTie ? '#94a3b8' : '#ff5447';
+            const dirCol = g.t.direction === 'UP' ? '#32A66A' : '#D85C52';
+            const outcomeCol = g.isWinning ? '#32A66A' : g.isTie ? '#A6B0A3' : '#D85C52';
             const zoneLeft = Math.min(g.x1, g.currentX);
             const zoneWidth = Math.max(2, Math.abs(g.currentX - g.x1));
 
@@ -1447,7 +1446,7 @@ export function PriceChart() {
                   x={g.x1 - 5}
                   y={32}
                   textAnchor="end"
-                  fill="#94a3b8"
+                  fill="#A6B0A3"
                   fontSize={9.5}
                   fontFamily="Inter, system-ui"
                   fontWeight={600}
@@ -1461,13 +1460,13 @@ export function PriceChart() {
                   y1={0}
                   x2={g.x2}
                   y2={H}
-                  stroke="#ff5447"
+                  stroke="#D85C52"
                   strokeWidth={1.5}
                   strokeDasharray="3 3"
                   strokeOpacity={0.85}
                 />
                 <g transform={`translate(${Math.max(10, g.x2 - 38)}, 14)`} filter="url(#qxPillShadow)">
-                  <rect width={76} height={18} rx={4} fill="#ea4d4d" />
+                  <rect width={76} height={18} rx={4} fill="#D85C52" />
                   <text
                     x={38}
                     y={12.5}
@@ -1512,7 +1511,7 @@ export function PriceChart() {
                       cx={g.x1}
                       cy={g.y}
                       r={10}
-                      fill="#121620"
+                      fill="#101610"
                       stroke={dirCol}
                       strokeWidth={2}
                       filter="url(#qxPillShadow)"
@@ -1538,7 +1537,7 @@ export function PriceChart() {
                         width={118}
                         height={26}
                         rx={5}
-                        fill="#121620"
+                        fill="#101610"
                         stroke={dirCol}
                         strokeWidth={1.25}
                       />
@@ -1556,7 +1555,7 @@ export function PriceChart() {
                       <text
                         x={10}
                         y={22}
-                        fill="#94a3b8"
+                        fill="#A6B0A3"
                         fontSize={8.5}
                         fontWeight={600}
                         fontFamily="JetBrains Mono, monospace"
@@ -1584,8 +1583,8 @@ export function PriceChart() {
                             width={badgeW}
                             height={badgeH}
                             rx={13}
-                            fill="#121620"
-                            stroke={isWinning ? '#00c076' : isTie ? '#64748b' : '#ff5447'}
+                            fill="#101610"
+                            stroke={isWinning ? '#32A66A' : isTie ? '#778477' : '#D85C52'}
                             strokeWidth={1.5}
                           />
                           {/* Left half: Outcome pill */}
@@ -1595,13 +1594,13 @@ export function PriceChart() {
                             width={72}
                             height={badgeH - 4}
                             rx={11}
-                            fill={isWinning ? '#00c076' : isTie ? '#334155' : 'rgba(255, 84, 71, 0.22)'}
+                            fill={isWinning ? '#32A66A' : isTie ? '#2C382F' : 'rgba(255, 84, 71, 0.22)'}
                           />
                           <text
                             x={38}
                             y={16.5}
                             textAnchor="middle"
-                            fill={isWinning ? '#ffffff' : isTie ? '#e2e8f0' : '#ff5447'}
+                            fill={isWinning ? '#ffffff' : isTie ? '#E9E5D5' : '#D85C52'}
                             fontSize={10}
                             fontWeight={800}
                             fontFamily="JetBrains Mono, monospace"
@@ -1660,8 +1659,8 @@ export function PriceChart() {
 
         {/* Pulsing Quotex Radar Beacon at the live candle tip */}
         <g ref={glowDotRef} style={{ transform: 'translate3d(-100px, -100px, 0)' }}>
-          <circle ref={glowDotWaveRef} r={10} fill="#00c076" opacity={0.35} className="animate-ping" />
-          <circle ref={glowDotCoreRef} r={4} fill="#00c076" opacity={0.9} />
+          <circle ref={glowDotWaveRef} r={10} fill="#32A66A" opacity={0.35} className="animate-ping" />
+          <circle ref={glowDotCoreRef} r={4} fill="#32A66A" opacity={0.9} />
           <circle r={2} fill="#ffffff" />
         </g>
       </svg>
@@ -1672,8 +1671,8 @@ export function PriceChart() {
         className="absolute top-0 left-0 z-20 pointer-events-none will-change-transform"
         style={{ transform: 'translate3d(-500px, -500px, 0)' }}
       >
-        <div className="bg-[#121620]/95 border border-white/20 text-white font-mono font-bold text-[10.5px] px-2 py-0.5 rounded shadow-lg flex items-center gap-1.5 backdrop-blur-md">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-slate-400">
+        <div className="bg-base-950/95 border border-white/20 text-cream font-mono font-bold text-[10.5px] px-2 py-0.5 rounded shadow-lg flex items-center gap-1.5 backdrop-blur-md">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-fog">
             <circle cx="12" cy="12" r="10" />
             <polyline points="12 6 12 12 16 14" />
           </svg>
@@ -1690,7 +1689,7 @@ export function PriceChart() {
             left: `${Math.max(10, Math.min(lowestWick.x - 24, (elRef.current?.clientWidth ?? 600) - 70))}px`,
           }}
         >
-          <div className="bg-[#171c26]/90 border border-white/10 text-slate-400 font-mono text-[9.5px] px-1.5 py-0.5 rounded shadow">
+          <div className="bg-base-900/90 border border-white/10 text-fog font-mono text-[9.5px] px-1.5 py-0.5 rounded shadow">
             {fmtPrice(lowestWick.price)}
           </div>
         </div>
@@ -1704,22 +1703,24 @@ export function PriceChart() {
       >
         <div
           ref={pricePillInnerRef}
-          className="flex items-center bg-[#007aff] hover:bg-[#0069db] text-white font-mono font-black text-[10.5px] pl-2 pr-1.5 py-0.5 rounded-l shadow-md cursor-pointer transition-colors duration-150"
+          className="flex items-center bg-accent-400 hover:bg-accent-400 text-cream font-mono font-bold text-[10.5px] pl-2 pr-1.5 py-0.5 rounded-l shadow-md cursor-pointer transition-colors duration-150"
         >
           <span ref={pricePillTextRef}>{fmtPrice(legend?.close ?? 0)}</span>
-          <span className="ml-1 text-[11px] opacity-80 hover:opacity-100" title="Set Price Alert">🔔</span>
+          <span className="ml-1 opacity-80 hover:opacity-100" title="Set price alert" aria-label="Set price alert"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 9a6 6 0 0112 0c0 5 2 6 2 6H4s2-1 2-6M10 20a2 2 0 004 0" /></svg></span>
         </div>
       </div>
 
       {/* Floating Bottom-Left Toolbar (Quotex layout: Pencil, Timeframe, Chart Type, Open price) */}
-      <div className="absolute left-4 bottom-3 z-20 flex items-center gap-1.5 bg-[#171c26]/95 backdrop-blur-md border border-white/10 rounded-lg p-1 shadow-panel select-none">
+      <div className="absolute left-4 bottom-3 z-20 flex items-center gap-1.5 bg-base-900/95 backdrop-blur-md border border-white/10 rounded-lg p-1 shadow-panel select-none">
         {/* Drawing tools button */}
         <button
           onClick={() => { setTool(tool === 'select' ? 'trend' : 'select'); }}
-          title="Drawing Tools"
-          className={clsx('h-7 px-2 rounded flex items-center gap-1 text-xs font-semibold transition', tool !== 'select' ? 'bg-[#007aff] text-white' : 'text-slate-300 hover:text-white hover:bg-white/[0.08]')}
+          title="Drawing tools"
+          aria-label="Drawing tools"
+          aria-pressed={tool !== 'select'}
+          className={clsx('h-7 px-2 rounded flex items-center gap-1 text-xs font-semibold transition', tool !== 'select' ? 'bg-accent-600 text-cream' : 'text-fog hover:text-cream hover:bg-white/[0.08]')}
         >
-          <span>✎</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4" /></svg>
           {tool !== 'select' && <span className="text-[10px]">{tool}</span>}
         </button>
 
@@ -1731,18 +1732,18 @@ export function PriceChart() {
               ['hline', '―', 'H-Line'],
               ['support', 'S', 'Support'],
               ['resistance', 'R', 'Resistance'],
-              ['fibonacci', '📐', 'Fibonacci'],
+              ['fibonacci', 'F', 'Fibonacci'],
             ].map(([v, glyph, title]) => (
               <button
                 key={v}
                 title={title}
                 onClick={() => { setTool(v as Tool); setPending(null); }}
-                className={clsx('h-6 px-1.5 rounded text-[10px] font-bold transition', tool === v ? 'bg-[#007aff] text-white' : 'text-slate-400 hover:text-white')}
+                className={clsx('h-6 px-1.5 rounded text-[10px] font-bold transition', tool === v ? 'bg-accent-400 text-cream' : 'text-fog hover:text-cream')}
               >
                 {glyph} {title}
               </button>
             ))}
-            <button title="Clear all" onClick={() => { setDrawings([]); setTool('select'); }} className="h-6 px-1.5 rounded text-[10px] text-[#ea4d4d] hover:bg-[#ea4d4d]/10">⌫</button>
+            <button title="Clear all" onClick={() => { setDrawings([]); setTool('select'); }} className="h-6 px-1.5 rounded text-[10px] text-down hover:bg-down/10">⌫</button>
           </div>
         )}
 
@@ -1752,17 +1753,17 @@ export function PriceChart() {
         <div className="relative">
           <button
             onClick={() => { setShowTfMenu((v) => !v); setShowTypeMenu(false); setShowIndMenu(false); }}
-            className="h-7 px-2 rounded flex items-center gap-1 text-[11px] font-bold text-slate-200 hover:text-white hover:bg-white/[0.08] transition"
+            className="h-7 px-2 rounded flex items-center gap-1 text-[11px] font-bold text-ink1 hover:text-cream hover:bg-white/[0.08] transition"
           >
             <span>{timeframe}</span>
           </button>
           {showTfMenu && (
-            <div className="absolute left-0 bottom-9 w-28 bg-[#171c26] border border-white/15 rounded-lg shadow-2xl p-1 z-30 flex flex-col gap-0.5">
+            <div className="absolute left-0 bottom-9 w-28 bg-base-900 border border-white/15 rounded-lg shadow-pop p-1 z-30 flex flex-col gap-0.5">
               {['5s', '15s', '30s', '1m', '2m', '5m', '15m', '1h'].map((tf) => (
                 <button
                   key={tf}
                   onClick={() => { setTimeframe(tf); setShowTfMenu(false); }}
-                  className={clsx('h-6 px-2 text-left text-xs font-semibold rounded transition', timeframe === tf ? 'bg-[#007aff] text-white' : 'text-slate-300 hover:text-white hover:bg-white/[0.08]')}
+                  className={clsx('h-6 px-2 text-left text-xs font-semibold rounded transition', timeframe === tf ? 'bg-accent-400 text-cream' : 'text-fog hover:text-cream hover:bg-white/[0.08]')}
                 >
                   {tf}
                 </button>
@@ -1777,22 +1778,23 @@ export function PriceChart() {
         <div className="relative">
           <button
             onClick={() => { setShowTypeMenu((v) => !v); setShowTfMenu(false); setShowIndMenu(false); }}
-            title="Chart Type"
-            className="w-7 h-7 rounded flex items-center justify-center text-xs text-slate-200 hover:text-white hover:bg-white/[0.08] transition"
+            title="Chart type"
+            aria-label={`Chart type: ${chartType}`}
+            className="w-7 h-7 rounded flex items-center justify-center text-fog hover:text-cream hover:bg-white/[0.08] transition"
           >
-            <span>{chartType === 'candles' ? '🕯' : chartType === 'line' ? '📈' : '📉'}</span>
+            {chartType === 'candles' ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M8 4v3M8 17v3M16 3v4M16 15v6M6 7h4v10H6zM14 7h4v8h-4z" /></svg> : chartType === 'line' ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M3 17l5-6 4 3 6-8 3 4" /></svg> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M3 19V15l5-6 4 3 6-8 3 4v11z" /></svg>}
           </button>
           {showTypeMenu && (
-            <div className="absolute left-0 bottom-9 w-28 bg-[#171c26] border border-white/15 rounded-lg shadow-2xl p-1 z-30 flex flex-col gap-0.5">
+            <div className="absolute left-0 bottom-9 w-28 bg-base-900 border border-white/15 rounded-lg shadow-pop p-1 z-30 flex flex-col gap-0.5">
               {[
-                ['candles', '🕯 Candles'],
-                ['line', '📈 Line'],
-                ['area', '📉 Area'],
+                ['candles', 'Candles'],
+                ['line', 'Line'],
+                ['area', 'Area'],
               ].map(([t, label]) => (
                 <button
                   key={t}
                   onClick={() => { setChartType(t as 'candles' | 'line' | 'area'); setShowTypeMenu(false); }}
-                  className={clsx('h-6 px-2 text-left text-xs font-semibold rounded transition', chartType === t ? 'bg-[#007aff] text-white' : 'text-slate-300 hover:text-white hover:bg-white/[0.08]')}
+                  className={clsx('h-6 px-2 text-left text-xs font-semibold rounded transition', chartType === t ? 'bg-accent-400 text-cream' : 'text-fog hover:text-cream hover:bg-white/[0.08]')}
                 >
                   {label}
                 </button>
@@ -1807,14 +1809,15 @@ export function PriceChart() {
         <div className="relative">
           <button
             onClick={() => { setShowIndMenu((v) => !v); setShowTfMenu(false); setShowTypeMenu(false); }}
-            className="h-7 px-2 rounded flex items-center gap-1 text-[11px] font-bold text-slate-200 hover:text-white hover:bg-white/[0.08] transition"
+            className="h-7 px-2 rounded flex items-center gap-1 text-[11px] font-bold text-ink1 hover:text-cream hover:bg-white/[0.08] transition"
             title="Indicators"
+            aria-label="Indicators"
           >
-            <span>🧭</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M3 12h4l3-8 4 16 3-8h4" /></svg>
           </button>
           {showIndMenu && (
-            <div className="absolute left-0 bottom-9 w-52 bg-[#171c26] border border-white/15 rounded-lg shadow-2xl p-2 z-30">
-              <div className="text-[10px] uppercase font-bold text-slate-400 px-1 pb-1">Overlays</div>
+            <div className="absolute left-0 bottom-9 w-52 bg-base-900 border border-white/15 rounded-lg shadow-pop p-2 z-30">
+              <div className="text-[10px] uppercase font-bold text-fog px-1 pb-1">Overlays</div>
               {[
                 ['vol', 'Volume'],
                 ['sma20', 'SMA 20'],
@@ -1824,14 +1827,14 @@ export function PriceChart() {
                 ['sar', 'Parabolic SAR (0.02, 0.2)'],
                 ['supertrend', 'Supertrend (10, 3)'],
               ].map(([k, label]) => (
-                <label key={k} className="flex items-center gap-2 px-1.5 py-1 text-xs rounded hover:bg-white/[0.06] cursor-pointer text-slate-200">
+                <label key={k} className="flex items-center gap-2 px-1.5 py-1 text-xs rounded hover:bg-white/[0.06] cursor-pointer text-ink1">
                   <input type="checkbox" className="ax-check" checked={!!inds[k as keyof IndState]} onChange={() => setInds({ ...inds, [k]: !inds[k as keyof IndState] })} />
                   <span>{label}</span>
                 </label>
               ))}
-              <div className="text-[10px] uppercase font-bold text-slate-400 px-1 pt-2 pb-1">Oscillator</div>
+              <div className="text-[10px] uppercase font-bold text-fog px-1 pt-2 pb-1">Oscillator</div>
               {([['none', 'None'], ['rsi', 'RSI (14)'], ['macd', 'MACD (12, 26, 9)'], ['stoch', 'Stochastic (14, 3, 3)']] as Array<[IndState['osc'], string]>).map(([k, label]) => (
-                <label key={k} className="flex items-center gap-2 px-1.5 py-1 text-xs rounded hover:bg-white/[0.06] cursor-pointer text-slate-200">
+                <label key={k} className="flex items-center gap-2 px-1.5 py-1 text-xs rounded hover:bg-white/[0.06] cursor-pointer text-ink1">
                   <input type="radio" name="osc" className="ax-check" checked={inds.osc === k} onChange={() => setInds({ ...inds, osc: k })} />
                   <span>{label}</span>
                 </label>
@@ -1841,68 +1844,68 @@ export function PriceChart() {
         </div>
 
         {/* Quotex Open Price display */}
-        <div className="border-l border-white/10 pl-2 pr-1 flex items-center text-[11px] font-mono text-slate-400">
+        <div className="border-l border-white/10 pl-2 pr-1 flex items-center text-[11px] font-mono text-fog">
           <span>Open:&nbsp;</span>
-          <span ref={openPriceTextRef} className="text-white font-semibold">{fmtPrice(legend?.open ?? activeCandleRef.current?.open ?? 0)}</span>
+          <span ref={openPriceTextRef} className="text-cream font-semibold">{fmtPrice(legend?.open ?? activeCandleRef.current?.open ?? 0)}</span>
         </div>
       </div>
 
       {/* Bottom-center zoom controls */}
-      <div className="absolute left-1/2 -translate-x-1/2 bottom-3 z-20 flex items-center gap-1 bg-[#171c26]/95 backdrop-blur-md border border-white/10 rounded-lg px-2 py-0.5 shadow-panel">
-        <button onClick={() => zoom(-1)} title="Zoom Out" className="w-6 h-6 rounded text-slate-300 hover:text-white hover:bg-white/[0.08] font-bold text-base transition flex items-center justify-center">−</button>
-        <span className="text-[10px] text-slate-400 font-mono px-1">ZOOM</span>
-        <button onClick={() => zoom(1)} title="Zoom In" className="w-6 h-6 rounded text-slate-300 hover:text-white hover:bg-white/[0.08] font-bold text-base transition flex items-center justify-center">+</button>
+      <div className="hidden sm:flex absolute left-1/2 -translate-x-1/2 bottom-3 z-20 items-center gap-1 bg-base-900/95 backdrop-blur-md border border-white/10 rounded-lg px-2 py-0.5 shadow-panel">
+        <button onClick={() => zoom(-1)} title="Zoom Out" className="w-6 h-6 rounded text-fog hover:text-cream hover:bg-white/[0.08] font-bold text-base transition flex items-center justify-center">−</button>
+        <span className="text-[10px] text-mute px-1 tracking-[0.06em]">ZOOM</span>
+        <button onClick={() => zoom(1)} title="Zoom In" className="w-6 h-6 rounded text-fog hover:text-cream hover:bg-white/[0.08] font-bold text-base transition flex items-center justify-center">+</button>
       </div>
 
       {/* Top right utility rail */}
       <div className="absolute right-2 top-2 z-20 flex gap-1">
-        <button onClick={resetView} title="Reset view" className="h-7 px-2.5 rounded bg-[#171c26]/90 border border-white/10 text-[11px] font-semibold text-slate-300 hover:text-white transition">Reset</button>
-        <button onClick={toggleFull} title="Fullscreen" className="h-7 px-2.5 rounded bg-[#171c26]/90 border border-white/10 text-[11px] font-semibold text-slate-300 hover:text-white transition">{isFull ? 'Exit' : '⤢'}</button>
+        <button onClick={resetView} title="Reset view" className="h-7 px-2.5 rounded bg-base-900/90 border border-white/10 text-[11px] font-semibold text-fog hover:text-cream transition">Reset</button>
+        <button onClick={toggleFull} title="Fullscreen" className="h-7 px-2.5 rounded bg-base-900/90 border border-white/10 text-[11px] font-semibold text-fog hover:text-cream transition">{isFull ? 'Exit' : '⤢'}</button>
       </div>
 
       {tool !== 'select' && (
-        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-20 text-[11px] bg-[#171c26]/95 border border-white/15 text-slate-200 rounded px-3 py-1.5 whitespace-nowrap shadow-pop">
+        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-20 text-[11px] bg-base-900/95 border border-white/15 text-ink1 rounded px-3 py-1.5 whitespace-nowrap shadow-pop">
           {tool === 'trend' || tool === 'fibonacci' ? (pending ? 'Click second point · ' : 'Click first point · ') : `Click chart to place ${tool === 'support' ? 'support' : tool === 'resistance' ? 'resistance' : 'line'} · `}
-          <button className="underline text-white font-bold ml-1" onClick={() => { setTool('select'); setPending(null); }}>done</button>
+          <button className="underline text-cream font-bold ml-1" onClick={() => { setTool('select'); setPending(null); }}>done</button>
         </div>
       )}
 
       {/* Quotex Pair Information Modal */}
       {showPairInfo && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setShowPairInfo(false)}>
-          <div className="bg-[#171c26] border border-white/15 rounded-2xl w-full max-w-md p-5 text-white shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-base-900 border border-white/15 rounded-lg w-full max-w-md p-5 text-cream shadow-pop space-y-4" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-white/10 pb-3">
               <div className="flex items-center gap-2">
                 <span className="text-xl">{assetInfo.flag1}{assetInfo.flag2}</span>
                 <div>
-                  <h3 className="font-extrabold text-base">{symbol}</h3>
-                  <div className="text-xs text-slate-400">{assetInfo.name}</div>
+                  <h3 className="font-semibold text-base">{symbol}</h3>
+                  <div className="text-xs text-fog">{assetInfo.name}</div>
                 </div>
               </div>
               <button onClick={() => setShowPairInfo(false)} className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-sm font-bold">✕</button>
             </div>
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div className="bg-base-900/80 p-2.5 rounded-lg border border-white/5">
-                <div className="text-slate-400 text-[10px] uppercase font-bold">Payout Rate</div>
-                <div className="text-[#eab308] font-black text-base mt-0.5">{optCfg?.assets.find((a) => a.symbol === symbol)?.payoutPct ?? assetInfo.defaultPayout}%</div>
+                <div className="text-fog text-[10px] uppercase font-bold">Payout Rate</div>
+                <div className="text-warn font-bold text-base mt-0.5">{optCfg?.assets.find((a) => a.symbol === symbol)?.payoutPct ?? assetInfo.defaultPayout}%</div>
               </div>
               <div className="bg-base-900/80 p-2.5 rounded-lg border border-white/5">
-                <div className="text-slate-400 text-[10px] uppercase font-bold">Category</div>
-                <div className="text-white font-bold text-sm mt-0.5">{assetInfo.category}</div>
+                <div className="text-fog text-[10px] uppercase font-bold">Category</div>
+                <div className="text-cream font-bold text-sm mt-0.5">{assetInfo.category}</div>
               </div>
               <div className="bg-base-900/80 p-2.5 rounded-lg border border-white/5">
-                <div className="text-slate-400 text-[10px] uppercase font-bold">Trading Schedule</div>
-                <div className="text-white font-semibold mt-0.5">24/7 Continuous OTC</div>
+                <div className="text-fog text-[10px] uppercase font-bold">Trading Schedule</div>
+                <div className="text-cream font-semibold mt-0.5">24/7 Continuous OTC</div>
               </div>
               <div className="bg-base-900/80 p-2.5 rounded-lg border border-white/5">
-                <div className="text-slate-400 text-[10px] uppercase font-bold">Expiration Window</div>
-                <div className="text-white font-semibold mt-0.5">5s – 4h</div>
+                <div className="text-fog text-[10px] uppercase font-bold">Expiration Window</div>
+                <div className="text-cream font-semibold mt-0.5">5s – 4h</div>
               </div>
             </div>
-            <div className="text-xs text-slate-400 leading-relaxed bg-base-900/40 p-3 rounded-lg border border-white/5">
+            <div className="text-xs text-fog leading-relaxed bg-base-900/40 p-3 rounded-lg border border-white/5">
               High-liquidity currency pair with microsecond price discovery, continuous rolling candles, and instant binary execution.
             </div>
-            <button onClick={() => setShowPairInfo(false)} className="w-full h-9 rounded-lg bg-[#007aff] hover:bg-[#0069db] text-white font-bold text-xs transition">
+            <button onClick={() => setShowPairInfo(false)} className="w-full h-9 rounded-lg bg-accent-400 hover:bg-accent-400 text-cream font-bold text-xs transition">
               Close
             </button>
           </div>
@@ -1910,9 +1913,9 @@ export function PriceChart() {
       )}
 
       {isLoading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-[#121620]/60 z-30">
-          <div className="text-xs text-slate-300 flex items-center gap-2">
-            <span className="w-3.5 h-3.5 rounded-full border-2 border-[#00c076] border-t-transparent animate-spin" />
+        <div className="absolute inset-0 flex items-center justify-center bg-base-950/60 z-30">
+          <div className="text-xs text-fog flex items-center gap-2">
+            <span className="w-3.5 h-3.5 rounded-full border-2 border-up border-t-transparent animate-spin" />
             Loading market data…
           </div>
         </div>

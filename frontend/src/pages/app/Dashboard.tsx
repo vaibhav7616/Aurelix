@@ -55,10 +55,10 @@ function PerformancePanel() {
           <span className={clsx('ax-num text-sm font-bold', clsUpDown(cum[cum.length - 1]))}>{fmtMoney(cum[cum.length - 1])}</span>
         </div>
         <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[120px] mt-1" preserveAspectRatio="none">
-          <line x1="0" y1={Y(0)} x2={W} y2={Y(0)} stroke="#2D382E" strokeWidth="1" />
+          <line x1="0" y1={Y(0)} x2={W} y2={Y(0)} stroke="#2C382F" strokeWidth="1" />
           <polygon points={`8,${Y(0)} ${line} ${X(cum.length - 1)},${Y(0)}`} fill={up ? 'rgba(60,177,121,0.12)' : 'rgba(212,105,78,0.12)'} />
-          <polyline points={line} fill="none" stroke={up ? '#3CB179' : '#D4694E'} strokeWidth="1.5" />
-          <circle cx={X(cum.length - 1)} cy={Y(cum[cum.length - 1])} r="2.5" fill={up ? '#3CB179' : '#D4694E'} />
+          <polyline points={line} fill="none" stroke={up ? '#32A66A' : '#D85C52'} strokeWidth="1.5" />
+          <circle cx={X(cum.length - 1)} cy={Y(cum[cum.length - 1])} r="2.5" fill={up ? '#32A66A' : '#D85C52'} />
         </svg>
       </div>
       <div>
@@ -69,7 +69,7 @@ function PerformancePanel() {
               <div className="flex-1" />
               <div
                 className="w-full rounded-[2px]"
-                style={{ height: `${Math.max(2, (Math.abs(d.v) / dMax) * 88)}%`, background: d.v >= 0 ? '#3CB179' : '#D4694E', opacity: d.v === 0 ? 0.25 : 0.9 }}
+                style={{ height: `${Math.max(2, (Math.abs(d.v) / dMax) * 88)}%`, background: d.v >= 0 ? '#32A66A' : '#D85C52', opacity: d.v === 0 ? 0.25 : 0.9 }}
               />
             </div>
           ))}

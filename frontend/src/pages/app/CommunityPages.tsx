@@ -10,7 +10,7 @@ import { Card, Empty, SectionTitle } from '../../components/ui/primitives';
 interface Leader { rank: number; name: string; profit: number; trades: number; me: boolean }
 interface Leaderboard { since: string; items: Leader[]; me: { rank: number; profit: number; trades: number } | null; participants: number }
 
-const MEDAL = ['bg-warn text-black', 'bg-[#c0c7d4] text-black', 'bg-[#cd7f32] text-black'];
+const MEDAL = ['bg-warn text-black', 'bg-fog text-black', 'bg-[#cd7f32] text-black'];
 
 /** "Top of the day": traders ranked by today's net profit. */
 export function TopPage() {
@@ -26,14 +26,14 @@ export function TopPage() {
       </div>
 
       <Card className="!p-4 flex items-center gap-4 bg-gradient-to-r from-accent-500/15 to-transparent">
-        <div className="w-12 h-12 rounded-full bg-accent-500/20 border-2 border-accent-500/50 flex items-center justify-center text-lg font-extrabold text-accent-300 ax-num">
+        <div className="w-12 h-12 rounded-full bg-accent-500/20 border-2 border-accent-500/50 flex items-center justify-center text-lg font-semibold text-accent-300 ax-num">
           {data?.me ? `#${data.me.rank}` : '—'}
         </div>
         <div className="flex-1">
           <div className="text-[13px] font-bold">Your position</div>
           <div className="text-[11px] text-mute">{data?.me ? `${data.me.trades} trades settled today` : 'Close a trade today to enter the ranking.'}</div>
         </div>
-        {data?.me && <div className={clsx('text-lg font-extrabold ax-num', data.me.profit >= 0 ? 'text-up' : 'text-down')}>{data.me.profit >= 0 ? '+' : ''}{fmtMoney(data.me.profit)}</div>}
+        {data?.me && <div className={clsx('text-lg font-semibold ax-num', data.me.profit >= 0 ? 'text-up' : 'text-down')}>{data.me.profit >= 0 ? '+' : ''}{fmtMoney(data.me.profit)}</div>}
         <Link to="/trading" className="ax-btn-primary">Trade</Link>
       </Card>
 
@@ -42,7 +42,7 @@ export function TopPage() {
         {!isLoading && !data?.items.length && <Empty title="No ranked traders yet" hint="The first settled trade of the day opens the ranking." />}
         {(data?.items ?? []).map((l) => (
           <div key={l.rank} className={clsx('flex items-center gap-3 px-4 py-2.5 border-b border-white/[0.05]', l.me && 'bg-accent-500/10')}>
-            <span className={clsx('w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-extrabold ax-num shrink-0', MEDAL[l.rank - 1] ?? 'bg-base-700 text-fog')}>{l.rank}</span>
+            <span className={clsx('w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-semibold ax-num shrink-0', MEDAL[l.rank - 1] ?? 'bg-base-700 text-fog')}>{l.rank}</span>
             <span className="w-8 h-8 rounded-full bg-base-700 flex items-center justify-center text-xs font-bold shrink-0">{l.name.charAt(0)}</span>
             <span className="min-w-0 flex-1">
               <span className="block text-[13px] font-semibold truncate">{l.name}{l.me && <span className="ml-1.5 text-[10px] text-accent-300 font-bold">YOU</span>}</span>

@@ -47,7 +47,7 @@ function isTyping(t: EventTarget | null): boolean {
 
 function StepBtn({ onClick, children, title }: { onClick: () => void; children: string; title: string }) {
   return (
-    <button onClick={onClick} title={title} className="w-8 h-8 rounded-md bg-base-700/80 hover:bg-base-600 text-ink1 font-bold text-lg leading-none flex items-center justify-center transition shrink-0 active:scale-95">
+    <button onClick={onClick} title={title} aria-label={`${children === '+' ? 'Increase' : 'Decrease'} (${title})`} className="w-8 h-8 rounded-md border border-line bg-base-850 hover:bg-base-700 text-ink1 text-[16px] leading-none flex items-center justify-center transition-colors shrink-0">
       {children}
     </button>
   );
@@ -55,10 +55,10 @@ function StepBtn({ onClick, children, title }: { onClick: () => void; children: 
 
 function Box({ label, action, children }: { label: string; action?: { text: string; onClick: () => void }; children: React.ReactNode }) {
   return (
-    <div className="bg-base-800 border border-line rounded-xl px-3 pt-2 pb-2.5">
-      <div className="flex items-center justify-between text-[11px] text-mute font-medium mb-1">
-        <span>{label}</span>
-        {action && <button onClick={action.onClick} className="text-[10px] text-accent-400 hover:text-accent-300 font-bold tracking-wide">{action.text}</button>}
+    <div className="bg-base-950 border border-line rounded-md px-3 pt-2 pb-2.5">
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-mute">{label}</span>
+        {action && <button onClick={action.onClick} className="text-[10.5px] text-accent-300 hover:text-accent-200 font-medium">{action.text}</button>}
       </div>
       {children}
     </div>
@@ -240,10 +240,10 @@ export function Ticket() {
         disabled={busy || invalid}
         title={up ? 'Up (Shift+W)' : 'Down (Shift+S)'}
         className={clsx(
-          'w-full h-14 rounded-xl text-white font-extrabold text-[16px] flex items-center justify-between px-5 transition active:scale-[0.98] disabled:opacity-50 disabled:active:scale-100',
-          up ? 'bg-up hover:brightness-110 shadow-[0_6px_20px_-8px_rgb(var(--c-up))]' : 'bg-down hover:brightness-110 shadow-[0_6px_20px_-8px_rgb(var(--c-down))]',
+          'w-full h-12 rounded-md text-cream font-semibold text-[15px] flex items-center justify-between px-4 transition disabled:opacity-45',
+          up ? 'bg-up hover:brightness-110' : 'bg-down hover:brightness-110',
           flash === d && 'brightness-125',
-          armedSignal?.symbol === symbol && armedSignal?.direction === d && 'ring-2 ring-offset-2 ring-offset-base-900 animate-pulse ' + (up ? 'ring-emerald-400' : 'ring-rose-400'),
+          armedSignal?.symbol === symbol && armedSignal?.direction === d && 'ring-2 ring-offset-2 ring-offset-base-900 animate-pulse ' + (up ? 'ring-up' : 'ring-down'),
         )}
       >
         <span>{up ? 'Up' : 'Down'}</span>
@@ -257,29 +257,42 @@ export function Ticket() {
   return (
     <div className="flex flex-col h-full min-h-0 bg-base-900 select-none">
       {/* asset + payout */}
-      <div className="px-4 pt-3 pb-2 flex items-center justify-between">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-base leading-none shrink-0">{assetInfo.flag1}{assetInfo.flag2}</span>
-          <span className="text-[14px] font-bold truncate">{symbol}</span>
+      <div className="px-4 pt-3 pb-3 border-b border-line">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[15px] leading-none shrink-0" aria-hidden>{assetInfo.flag1}{assetInfo.flag2}</span>
+            <span className="text-[13.5px] font-semibold text-ink1 truncate">{symbol}</span>
+          </div>
+          <span className="text-[12px] ax-num text-mute">Payout <span className="font-semibold text-up">{payoutPct}%</span></span>
         </div>
-        <span className="text-[13px] font-bold ax-num text-up">{payoutPct}%</span>
+        {/* bid / ask straight from the server quote — no client-side spread */}
+        <div className="mt-2.5 grid grid-cols-2 gap-1.5 ax-num">
+          <div className="rounded-md bg-base-950 border border-line px-2.5 py-1.5">
+            <div className="text-[10px] uppercase tracking-[0.06em] text-mute">Bid</div>
+            <div className="text-[13px] text-ink1">{tick ? fmtPrice(tick.bid) : '—'}</div>
+          </div>
+          <div className="rounded-md bg-base-950 border border-line px-2.5 py-1.5">
+            <div className="text-[10px] uppercase tracking-[0.06em] text-mute">Ask</div>
+            <div className="text-[13px] text-ink1">{tick ? fmtPrice(tick.ask) : '—'}</div>
+          </div>
+        </div>
       </div>
 
       {/* Armed Algorithmic Signal Indicator Banner */}
       {armedSignal && armedSignal.symbol === symbol && (
-        <div className="mx-4 mt-2.5 p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between text-xs animate-in fade-in">
+        <div className="mx-4 mt-2.5 p-2 rounded-md bg-up/10 border border-up/30 flex items-center justify-between text-xs animate-in fade-in">
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-base leading-none">⚡</span>
             <div className="min-w-0">
-              <div className="font-black text-emerald-400 flex items-center gap-1 text-[11px] leading-tight">
+              <div className="font-bold text-up flex items-center gap-1 text-[11px] leading-tight">
                 <span>SIGNAL: {armedSignal.direction === 'UP' ? 'CALL ▲' : 'PUT ▼'}</span>
               </div>
-              <div className="text-[10px] text-slate-400 truncate">{armedSignal.indicator}</div>
+              <div className="text-[10px] text-fog truncate">{armedSignal.indicator}</div>
             </div>
           </div>
           <button
             onClick={() => armSignal(null)}
-            className="w-5 h-5 rounded-full bg-white/10 hover:bg-white/20 text-slate-400 hover:text-white flex items-center justify-center text-xs shrink-0"
+            className="w-5 h-5 rounded-full bg-white/10 hover:bg-white/20 text-fog hover:text-cream flex items-center justify-center text-xs shrink-0"
             title="Dismiss signal"
           >
             ✕
@@ -287,14 +300,14 @@ export function Ticket() {
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-4 pb-2 space-y-2.5">
+      <div className="flex-1 overflow-y-auto px-4 pt-3 pb-2 space-y-2.5">
         {/* TIME */}
         <Box label={mode === 'TIME' ? 'Time' : 'Timer'} action={{ text: 'SWITCH TIME', onClick: () => { soundService.playClick(); setShowTimePresets(false); setMode((m) => (m === 'TIME' ? 'TIMER' : 'TIME')); } }}>
           <div className="flex items-center gap-2">
             <StepBtn onClick={() => shiftTime(-1)} title="Shift+Q">−</StepBtn>
             <button
               onClick={() => { if (mode === 'TIMER') setShowTimePresets((v) => !v); }}
-              className={clsx('flex-1 text-center font-mono text-[18px] font-bold tracking-tight', mode === 'TIMER' ? 'cursor-pointer hover:text-accent-300' : 'cursor-default')}
+              className={clsx('flex-1 text-center ax-num text-[18px] font-bold tracking-tight', mode === 'TIMER' ? 'cursor-pointer hover:text-accent-300' : 'cursor-default')}
             >
               {mode === 'TIME' ? fmtClock(fixedExpiry) : fmtHMS(durationSec)}
             </button>
@@ -306,7 +319,7 @@ export function Ticket() {
                 <button
                   key={d}
                   onClick={() => { soundService.playClick(); setDurationSec(d); setShowTimePresets(false); }}
-                  className={clsx('h-7 rounded-md text-[11px] font-bold transition font-mono', durationSec === d ? 'bg-accent-500 text-white' : 'bg-base-700/70 text-fog hover:text-ink1')}
+                  className={clsx('h-7 rounded-md text-[11px] font-bold transition ax-num', durationSec === d ? 'bg-accent-500 text-cream' : 'bg-base-700/70 text-fog hover:text-ink1')}
                 >
                   {d < 60 ? `${d}s` : d < 3600 ? `${d / 60}m` : `${d / 3600}h`}
                 </button>
@@ -320,7 +333,7 @@ export function Ticket() {
         <Box label="Investment" action={{ text: stakeMode === 'PCT' ? 'SWITCH TO $' : 'SWITCH TO %', onClick: () => { soundService.playClick(); setStakeInput(null); setStakeMode((m) => (m === 'PCT' ? 'USD' : 'PCT')); } }}>
           <div className="flex items-center gap-2">
             <StepBtn onClick={() => shiftStake(-1)} title="Shift+A">−</StepBtn>
-            <div className="flex-1 text-center font-mono text-[18px] font-bold tracking-tight">
+            <div className="flex-1 text-center ax-num text-[18px] font-bold tracking-tight">
               {stakeInput !== null ? (
                 <input
                   value={stakeInput}
@@ -338,35 +351,37 @@ export function Ticket() {
             </div>
             <StepBtn onClick={() => shiftStake(1)} title="Shift+D">+</StepBtn>
           </div>
-          {stakeMode === 'PCT' && <div className="text-[10px] text-mute text-center mt-0.5 ax-num">= {fmtMoney(effStake)} of {fmtMoney(available)}</div>}
+          <div className="text-[10.5px] text-mute text-center mt-1 ax-num">
+            {stakeMode === 'PCT' ? <>= {fmtMoney(effStake)} · </> : null}Available {account ? fmtMoney(available) : '—'}
+          </div>
           {/* ½ · 2× · Min · Max (USD mode) */}
           {stakeMode === 'USD' && (
           <div className="grid grid-cols-4 gap-1 mt-2.5 pt-2 border-t border-line">
             <button
               onClick={() => { soundService.playClick(); setStake((s) => Math.max(minS, Math.round((s / 2) * 100) / 100)); }}
               title="Half Stake (1/2)"
-              className="h-6 rounded bg-base-700/80 hover:bg-base-700 text-fog hover:text-white text-[11px] font-bold font-mono transition active:scale-95"
+              className="h-6 rounded bg-base-700/80 hover:bg-base-700 text-fog hover:text-cream text-[11px] font-bold ax-num transition active:scale-95"
             >
               ½
             </button>
             <button
               onClick={() => { soundService.playClick(); setStake((s) => Math.min(available > 0 ? available : maxS, Math.round(s * 2 * 100) / 100)); }}
               title="Double Stake (2x)"
-              className="h-6 rounded bg-base-700/80 hover:bg-base-700 text-fog hover:text-white text-[11px] font-bold font-mono transition active:scale-95"
+              className="h-6 rounded bg-base-700/80 hover:bg-base-700 text-fog hover:text-cream text-[11px] font-bold ax-num transition active:scale-95"
             >
               2×
             </button>
             <button
               onClick={() => { soundService.playClick(); setStake(minS); }}
               title="Minimum Stake"
-              className="h-6 rounded bg-base-700/80 hover:bg-base-700 text-fog hover:text-white text-[10px] font-bold uppercase transition active:scale-95"
+              className="h-6 rounded bg-base-700/80 hover:bg-base-700 text-fog hover:text-cream text-[10px] font-bold uppercase transition active:scale-95"
             >
               Min
             </button>
             <button
               onClick={() => { soundService.playClick(); setStake(Math.min(maxS, Math.max(minS, Math.floor(available)))); }}
               title="All-in / Max Available"
-              className="h-6 rounded bg-base-700/80 hover:bg-base-700 text-amber-400 hover:text-amber-300 text-[10px] font-bold uppercase transition active:scale-95"
+              className="h-6 rounded bg-base-700/80 hover:bg-base-700 text-warn hover:text-warn text-[10px] font-bold uppercase transition active:scale-95"
             >
               Max
             </button>
@@ -379,7 +394,7 @@ export function Ticket() {
                 <button
                   key={v}
                   onClick={() => { soundService.playClick(); if (stakeMode === 'PCT') setStakePct(v); else setStake(v); }}
-                  className={clsx('h-6 rounded-md text-[10px] font-bold transition font-mono', sel ? 'bg-accent-500 text-white' : 'bg-base-700/70 text-fog hover:text-ink1')}
+                  className={clsx('h-6 rounded-md text-[10px] font-bold transition ax-num', sel ? 'bg-accent-500 text-cream' : 'bg-base-700/70 text-fog hover:text-ink1')}
                 >
                   {stakeMode === 'PCT' ? `${v}%` : `$${v}`}
                 </button>
@@ -389,7 +404,7 @@ export function Ticket() {
         </Box>
 
         {/* PENDING TRADE */}
-        <div className="rounded-xl border border-line px-3 py-2">
+        <div className="rounded-md border border-line px-3 py-2">
           <button onClick={() => { soundService.playClick(); setPendingTrade(!pendingTrade); }} className="w-full flex items-center justify-between">
             <span className="flex items-center gap-1.5 text-[12px] font-semibold text-fog">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
@@ -408,7 +423,7 @@ export function Ticket() {
                   onChange={(e) => setTargetPrice(e.target.value.replace(/[^0-9.]/g, ''))}
                   placeholder={tick ? fmtPrice(tick.mid) : 'Target price'}
                   inputMode="decimal"
-                  className="ax-input !h-8 !text-xs font-mono"
+                  className="ax-input !h-8 !text-xs ax-num"
                 />
                 {tick && <button onClick={() => setTargetPrice(String(tick.mid))} className="h-8 px-2 rounded-md bg-base-700 text-[10px] font-bold text-fog hover:text-ink1 shrink-0">Current</button>}
               </div>
@@ -423,25 +438,25 @@ export function Ticket() {
       <div className="shrink-0 px-4 pt-2 pb-4 space-y-2">
         {/* 1-Click Disabled Confirmation Card */}
         {confirmDir && (
-          <div className="p-3 rounded-xl bg-base-800 border border-amber-400/40 space-y-2 animate-in fade-in">
-            <div className="text-xs font-bold text-amber-300 flex items-center justify-between">
+          <div className="p-3 rounded-md bg-base-800 border border-warn/40 space-y-2 animate-in fade-in">
+            <div className="text-xs font-bold text-warn flex items-center justify-between">
               <span>Confirm {confirmDir === 'UP' ? 'CALL ▲' : 'PUT ▼'} Trade?</span>
-              <span className="text-white font-mono font-bold">{fmtMoney(effStake)}</span>
+              <span className="text-cream ax-num font-bold">{fmtMoney(effStake)}</span>
             </div>
-            <div className="text-[10px] text-slate-300 flex justify-between font-mono">
+            <div className="text-[10px] text-fog flex justify-between ax-num">
               <span>{symbol}</span>
               <span>Expiry: {mode === 'TIME' ? fmtClock(fixedExpiry) : `${fmtHMS(durationSec)}`}</span>
             </div>
             <div className="grid grid-cols-2 gap-2 pt-1">
               <button
                 onClick={() => setConfirmDir(null)}
-                className="py-1.5 rounded-lg bg-white/10 text-slate-300 text-xs font-bold hover:bg-white/20 transition"
+                className="py-1.5 rounded-lg bg-white/10 text-fog text-xs font-bold hover:bg-white/20 transition"
               >
                 Cancel
               </button>
               <button
                 onClick={() => submit(confirmDir)}
-                className="py-1.5 rounded-lg bg-[#00c076] text-slate-950 text-xs font-black hover:bg-[#00d684] transition"
+                className="py-1.5 rounded-lg bg-up text-base-950 text-xs font-bold hover:bg-up transition"
               >
                 Confirm Trade
               </button>
@@ -451,7 +466,7 @@ export function Ticket() {
 
         {dirBtn('UP')}
         <div className="text-center py-1">
-          <div className="text-[22px] font-extrabold ax-num text-up leading-none">+{payoutPct}%</div>
+          <div className="text-[19px] font-semibold ax-num text-up leading-none">+{payoutPct}%</div>
           <div className="text-[11px] text-mute mt-1">Your payout: <span className="ax-num font-bold text-ink1">{fmtMoney(payout)}</span></div>
         </div>
         {dirBtn('DOWN')}
