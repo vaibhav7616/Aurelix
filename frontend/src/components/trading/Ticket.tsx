@@ -11,6 +11,7 @@ import { useSettingsStore } from '../../stores/settingsStore';
 import { useSignalsStore } from '../../stores/signalsStore';
 import { FieldError } from '../ui/primitives';
 import { clsx } from 'clsx';
+import { uuid } from '../../lib/uuid';
 
 interface Account { id: string; balance: number; lockedBalance?: number; accountNumber: string; accountType: string }
 
@@ -128,7 +129,7 @@ export function Ticket() {
       post<OptionTrade & { balance: number }>(
         '/api/v1/options',
         { accountId: account?.id, symbol, direction, stake: effStake, ...(mode === 'TIME' ? { expiresAt: fixedExpiry } : { durationSec }) },
-        { 'Idempotency-Key': crypto.randomUUID() },
+        { 'Idempotency-Key': uuid() },
       ),
     onSuccess: (o) => {
       soundService.playTradePlaced();
