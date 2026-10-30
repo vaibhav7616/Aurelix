@@ -3,6 +3,8 @@ import { Request, Response, NextFunction } from 'express';
 interface RateLimitOptions {
   windowMs: number;
   max: number;
+  /** bucket key; defaults to the client IP */
+  key?: (req: Request) => string | undefined;
   message?: { success: boolean; data: null; error: { code: string; message: string } };
 }
 
@@ -20,11 +22,9 @@ export function createSafeRateLimiter(options: RateLimitOptions) {
 
   return (req: Request, res: Response, next: NextFunction) => {
     try {
-      const ip =
-        (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
-        req.ip ||
-        req.socket.remoteAddress ||
-        'unknown';
+      // req.ip honours `trust proxy` (set to our own proxy hops) — never read X-Forwarded-For
+      // directly: its first entry is whatever the client sent, so limits could be dodged per request
+      const ip = options.key?.(req) ?? req.ip ?? req.socket.remoteAddress ?? 'unknown';
       const now = Date.now();
       const record = hits.get(ip);
 
@@ -61,8 +61,23 @@ export const apiLimiter = createSafeRateLimiter({
 
 export const authLimiter = createSafeRateLimiter({
   windowMs: 60_000,
-  max: 500,
+  max: 60,
   message: { success: false, data: null, error: { code: 'RATE_LIMITED', message: 'Too many auth attempts' } },
+});
+
+const loginMessage = { success: false, data: null, error: { code: 'RATE_LIMITED', message: 'Too many login attempts — wait a few minutes and try again' } };
+/** Password guessing: 10 attempts per 5 min from one IP… */
+export const loginIpLimiter = createSafeRateLimiter({ windowMs: 5 * 60_000, max: 10, message: loginMessage });
+/** …and 10 per 15 min against one account, whatever IPs the attempts come from. */
+export const loginAccountLimiter = createSafeRateLimiter({
+  windowMs: 15 * 60_000,
+  max: 10,
+  key: (req) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const id = String(b.identifier ?? b.email ?? b.username ?? '').trim().toLowerCase();
+    return id ? `acct:${id}` : undefined;
+  },
+  message: loginMessage,
 });
 
 export const orderLimiter = createSafeRateLimiter({

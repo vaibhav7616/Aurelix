@@ -11,10 +11,11 @@ import { audit } from '../services/auditService';
 import { requireAuth, AuthedRequest } from '../middleware/auth';
 import { env } from '../config/env';
 import { accountNumber } from '../trading/executionEngine';
+import { loginIpLimiter, loginAccountLimiter } from '../middleware/rateLimit';
 
 const r = Router();
 
-r.post('/register', validateBody(registerSchema), ah(async (req, res) => {
+r.post('/register', loginIpLimiter, validateBody(registerSchema), ah(async (req, res) => {
   const { email, password, firstName, lastName } = req.body as { email: string; password: string; firstName: string; lastName: string };
   const exists = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
   if (exists) throw Err.conflict('Email already registered');
@@ -41,7 +42,7 @@ r.post('/register', validateBody(registerSchema), ah(async (req, res) => {
   res.status(201).json({ success: true, data: { id: user.id, email: user.email }, error: null });
 }));
 
-r.post('/login', async (req, res) => {
+r.post('/login', loginIpLimiter, loginAccountLimiter, async (req, res) => {
   try {
     const body = (req.body ?? {}) as Record<string, any>;
     const id = String(body.identifier ?? body.email ?? body.username ?? '').trim();

@@ -16,6 +16,7 @@ describe('production config', () => {
     expect(errs.join('\n')).toMatch(/MARKET_PROVIDER/);
     expect(errs.join('\n')).toMatch(/development database password/);
   });
+  it('rejects a wildcard CORS origin', () => expect(productionConfigErrors({ ...good, CORS_ORIGINS: 'https://app.test,*' }).join()).toMatch(/not \*/));
   it('requires every secret to be set', () => expect(productionConfigErrors({})).toHaveLength(6));
 });
 

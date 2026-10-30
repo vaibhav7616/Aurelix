@@ -29,17 +29,19 @@ import leaderboardRoutes from './routes/leaderboard';
 export function createApp(): express.Express {
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', 1);
+  // number of our own reverse proxies in front (nginx = 1; add 1 per TLS load balancer / CDN)
+  app.set('trust proxy', parseInt(process.env.TRUST_PROXY_HOPS ?? '1', 10));
 
   app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
   app.use(
     cors({
       origin: (origin, callback) => {
         // allow requests with no origin (e.g. mobile apps, curl, postman, same-origin)
-        if (!origin || !env.isProd || env.CORS_ORIGINS.includes(origin) || env.CORS_ORIGINS.includes('*')) {
+        if (!origin || !env.isProd || env.CORS_ORIGINS.includes(origin)) {
           return callback(null, true);
         }
-        return callback(null, true);
+        // production: only the configured origins may call the API from a browser
+        return callback(null, false);
       },
       credentials: true,
     })
@@ -56,7 +58,7 @@ export function createApp(): express.Express {
     res.status(ok ? 200 : 503).json({ success: ok, data: { backend: true, postgres: db, redis }, error: ok ? null : { code: 'NOT_READY', message: 'Dependency check failed' } });
   });
 
-  app.use('/api/v1/auth', authRoutes);
+  app.use('/api/v1/auth', authLimiter, authRoutes);
   app.use('/api/v1/users', apiLimiter, userRoutes);
   app.use('/api/v1/accounts', apiLimiter, accountRoutes);
   app.use('/api/v1/assets', apiLimiter, assetRoutes);

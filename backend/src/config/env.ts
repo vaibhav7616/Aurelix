@@ -40,6 +40,7 @@ export function productionConfigErrors(e: NodeJS.ProcessEnv): string[] {
     if (v && (v.length < 32 || /change-me|dev-/i.test(v))) errs.push(`${k} must be a random secret of 32+ characters`);
   }
   if (e.JWT_SECRET && e.JWT_SECRET === e.JWT_REFRESH_SECRET) errs.push('JWT_SECRET and JWT_REFRESH_SECRET must differ');
+  if ((e.CORS_ORIGINS ?? '').split(',').some((o) => o.trim() === '*')) errs.push('CORS_ORIGINS must list exact origins, not *');
   if (/aurelix_dev_secret/.test(e.DATABASE_URL ?? '')) errs.push('DATABASE_URL uses the development database password');
   if ((e.MARKET_PROVIDER ?? 'demo') === 'demo') errs.push('MARKET_PROVIDER=demo runs on simulated prices — set MARKET_PROVIDER=real');
   return errs;

@@ -23,6 +23,7 @@ services:
       FRONTEND_URL: ${FRONTEND_URL:?set FRONTEND_URL e.g. https://app.example.com}
       CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS e.g. https://app.example.com}
       MARKET_PROVIDER: ${MARKET_PROVIDER:-real}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
       PAYMENT_PROVIDER: demo   # only used for demo-account instant deposits; live deposits are admin-verified
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}

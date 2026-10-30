@@ -26,9 +26,9 @@ export function signRefresh(payload: Omit<RefreshClaims, 'type'>): string {
 }
 
 export function verifyAccess(token: string): AccessClaims {
-  return jwt.verify(token, env.JWT_SECRET || DEFAULT_SECRET) as AccessClaims;
+  return jwt.verify(token, env.JWT_SECRET || DEFAULT_SECRET, { algorithms: ['HS256'] }) as AccessClaims;
 }
 
 export function verifyRefresh(token: string): RefreshClaims {
-  return jwt.verify(token, env.JWT_REFRESH_SECRET || DEFAULT_REFRESH) as RefreshClaims;
+  return jwt.verify(token, env.JWT_REFRESH_SECRET || DEFAULT_REFRESH, { algorithms: ['HS256'] }) as RefreshClaims;
 }
