@@ -7,6 +7,7 @@ import { accountNumber } from '../trading/executionEngine';
 import { audit } from '../services/auditService';
 import { netPnl } from '../services/pnlService';
 import { getProvider } from '../services/marketService';
+import { emitToUser } from '../websocket/socketServer';
 
 const r = Router();
 r.use(requireAuth);
@@ -94,6 +95,28 @@ r.post('/:id/reset-demo', ah(async (req: AuthedRequest, res) => {
     data: { accountId: acct.id, type: 'DEPOSIT', amount: starting, balanceAfter: starting, memo: 'Demo balance reload ($10,000)' },
   });
   res.json({ success: true, data: { ...updated, balance: Number(updated.balance) }, error: null });
+}));
+
+// Refill a DEMO account back to the starting balance (Quotex "Top up demo balance").
+// Stake reserved by pending trades stays reserved: target = starting balance + lockedBalance.
+r.post('/:id/refill', ah(async (req: AuthedRequest, res) => {
+  const acct = await prisma.account.findFirst({ where: { id: req.params.id, userId: req.userId! } });
+  if (!acct) { res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'Account not found' } }); return; }
+  if (acct.accountType !== 'DEMO') { res.status(422).json({ success: false, data: null, error: { code: 'NOT_DEMO', message: 'Only demo accounts can be refilled' } }); return; }
+  const target = env.DEMO_STARTING_BALANCE + Number(acct.lockedBalance);
+  const diff = Math.round((target - Number(acct.balance)) * 100) / 100;
+  if (diff <= 0) { res.status(422).json({ success: false, data: null, error: { code: 'BALANCE_FULL', message: `Demo balance is already at or above ${env.DEMO_STARTING_BALANCE.toLocaleString('en-US')}` } }); return; }
+  // conditional update: if a trade moved the balance meanwhile, nothing is written and the client retries
+  const updated = await prisma.$transaction(async (tx) => {
+    const n = await tx.account.updateMany({ where: { id: acct.id, balance: acct.balance }, data: { balance: target } });
+    if (!n.count) return false;
+    await tx.walletTransaction.create({ data: { accountId: acct.id, type: 'ADJUSTMENT', amount: diff, balanceAfter: target, memo: 'Demo balance refill (simulated)' } });
+    return true;
+  });
+  if (!updated) { res.status(409).json({ success: false, data: null, error: { code: 'BALANCE_CHANGED', message: 'Balance changed while refilling — try again' } }); return; }
+  await audit({ actorId: req.userId, action: 'ACCOUNT_DEMO_REFILL', entityType: 'Account', entityId: acct.id, metadata: { amount: diff } });
+  emitToUser(req.userId!, 'balance:updated', { accountId: acct.id, balance: target });
+  res.json({ success: true, data: { accountId: acct.id, balance: target, added: diff }, error: null });
 }));
 
 // Dashboard stats — all from backend

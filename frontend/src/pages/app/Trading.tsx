@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { get } from '../../lib/api';
 import { useTerminal } from '../../stores/terminalStore';
@@ -8,7 +8,7 @@ import { SignalsDrawer } from '../../components/trading/SignalsDrawer';
 import { SettingsModal } from '../../components/trading/SettingsModal';
 import { useSignalsStore } from '../../stores/signalsStore';
 import { useSettingsStore } from '../../stores/settingsStore';
-import { OpenTradesList, PendingTradesList, TradeHistoryTable, CompactTradeHistoryList } from '../../components/trading/TradesPanel';
+import { OpenTradesList, PendingTradesList, ClosedTradesList } from '../../components/trading/TradesPanel';
 import { useIsMobile } from '../../hooks/useMediaQuery';
 import { getAssetMeta } from '../../lib/assetMeta';
 import type { OptionTrade } from '../../lib/options';
@@ -192,10 +192,10 @@ function AssetSelectorModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
   );
 }
 
-/** Right rail tabs: Trades and History */
-function RailTabs() {
+/** Quotex "Trades" panel: Opened (pending + running) and Closed tabs. */
+function TradesPanel({ onClose }: { onClose?: () => void }) {
   const { accountId } = useTerminal();
-  const [tab, setTab] = useState<'trades' | 'history'>('trades');
+  const [tab, setTab] = useState<'open' | 'closed'>('open');
   const { data: open } = useQuery({
     queryKey: ['options', 'open', accountId],
     queryFn: () => get<OptionTrade[]>('/api/v1/options/open', accountId ? { accountId } : {}),
@@ -203,48 +203,50 @@ function RailTabs() {
   });
 
   return (
-    <div className="flex flex-col min-h-0 border-t border-line bg-[#171c26]">
-      <div className="flex items-center border-b border-line px-2 shrink-0 h-9">
-        <button
-          onClick={() => setTab('trades')}
-          data-active={tab === 'trades'}
-          className={clsx(
-            'h-full px-3 text-xs font-bold border-b-2 transition flex items-center gap-1.5',
-            tab === 'trades' ? 'border-[#007aff] text-white' : 'border-transparent text-slate-400 hover:text-white'
-          )}
-        >
-          <span>Trades</span>
-          {!!open?.length && (
-            <span className="text-[10px] bg-[#eab308] text-black font-extrabold rounded-full px-1.5 py-0.2 leading-tight">
-              {open.length}
-            </span>
-          )}
-        </button>
-        <button
-          onClick={() => setTab('history')}
-          data-active={tab === 'history'}
-          className={clsx(
-            'h-full px-3 text-xs font-bold border-b-2 transition flex items-center gap-1.5',
-            tab === 'history' ? 'border-[#007aff] text-white' : 'border-transparent text-slate-400 hover:text-white'
-          )}
-        >
-          <span>History</span>
-        </button>
+    <div className="flex flex-col h-full min-h-0 bg-base-900">
+      <div className="flex items-center px-3 pt-3 pb-2 shrink-0">
+        <span className="text-[14px] font-bold">Trades</span>
+        {onClose && (
+          <button onClick={onClose} title="Hide trades" className="ml-auto w-7 h-7 rounded-md text-mute hover:text-ink1 hover:bg-white/[0.06] flex items-center justify-center">✕</button>
+        )}
       </div>
-      <div className="flex-1 overflow-y-auto min-h-0 p-2">
-        {tab === 'trades' ? (
+      <div className="mx-3 mb-2 grid grid-cols-2 p-0.5 rounded-lg bg-base-800 border border-line shrink-0">
+        {([['open', 'Opened'], ['closed', 'Closed']] as const).map(([v, l]) => (
+          <button
+            key={v}
+            onClick={() => setTab(v)}
+            className={clsx('h-7 rounded-md text-[12px] font-semibold transition flex items-center justify-center gap-1.5', tab === v ? 'bg-base-700 text-ink1' : 'text-mute hover:text-ink1')}
+          >
+            {l}
+            {v === 'open' && !!open?.length && <span className="text-[10px] bg-accent-500 text-white font-bold rounded-full px-1.5 leading-[16px]">{open.length}</span>}
+          </button>
+        ))}
+      </div>
+      <div className="flex-1 overflow-y-auto min-h-0">
+        {tab === 'open' ? (
           <>
             <PendingTradesList accountId={accountId} />
             <OpenTradesList accountId={accountId} />
           </>
         ) : (
-          <div className="text-[11px]">
-            <CompactTradeHistoryList accountId={accountId} />
-          </div>
+          <ClosedTradesList accountId={accountId} />
         )}
       </div>
     </div>
   );
+}
+
+/** "/" opens the asset selector (when not typing). */
+function useSlashToOpen(open: () => void) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      e.preventDefault();
+      open();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
 }
 
 function MobileTrade() {
@@ -254,7 +256,7 @@ function MobileTrade() {
   const toggleSettings = useSettingsStore((s) => s.toggleOpen);
 
   return (
-    <div className="flex flex-col h-[calc(100dvh-52px-56px)] min-h-[480px] relative">
+    <div className="flex flex-col h-[calc(100dvh-60px-52px)] min-h-[480px] relative">
       <AssetTabs onOpenSelector={() => setShowAssetSelector(true)} />
       <AssetSelectorModal isOpen={showAssetSelector} onClose={() => setShowAssetSelector(false)} />
       <SignalsDrawer />
@@ -280,18 +282,15 @@ function MobileTrade() {
             </div>
           </div>
         )}
-        {tab === 'trade' && <div className="h-full overflow-hidden bg-base-900"><Ticket /></div>}
-        {tab === 'trades' && <div className="h-full overflow-auto bg-base-900"><RailTabs /></div>}
+        {tab === 'trade' && <div className="h-full overflow-hidden"><Ticket /></div>}
+        {tab === 'trades' && <TradesPanel />}
       </div>
-      <div className="grid grid-cols-3 border-t border-line bg-[#171c26] shrink-0">
-        {[['chart', 'Chart'], ['trade', 'Trade Ticket'], ['trades', 'Positions']].map(([v, l]) => (
+      <div className="grid grid-cols-3 border-t border-line bg-base-900 shrink-0">
+        {[['chart', 'Chart'], ['trade', 'Trade'], ['trades', 'Trades']].map(([v, l]) => (
           <button
             key={v}
             onClick={() => setTab(v as never)}
-            className={clsx(
-              'py-2.5 text-[11px] font-bold uppercase tracking-wide border-t-2 transition',
-              tab === v ? 'text-[#007aff] border-[#007aff]' : 'text-slate-400 border-transparent'
-            )}
+            className={clsx('py-2.5 text-[11px] font-bold uppercase tracking-wide border-t-2 transition', tab === v ? 'text-accent-400 border-accent-500' : 'text-mute border-transparent')}
           >
             {l}
           </button>
@@ -307,15 +306,28 @@ export function Trading() {
   const toggleSignals = useSignalsStore((s) => s.toggleOpen);
   const isSignalsOpen = useSignalsStore((s) => s.isOpen);
   const toggleSettings = useSettingsStore((s) => s.toggleOpen);
+  const [showTrades, setShowTrades] = useState<boolean>(() => {
+    const saved = localStorage.getItem('ax_trades_panel');
+    return saved ? saved === '1' : window.innerWidth >= 1400;
+  });
+  useEffect(() => { localStorage.setItem('ax_trades_panel', showTrades ? '1' : '0'); }, [showTrades]);
+  const openSelector = useCallback(() => setShowAssetSelector(true), []);
+  useSlashToOpen(openSelector);
 
   if (isMobile) return <MobileTrade />;
 
   return (
-    <div className="h-[calc(100vh-52px)] min-h-[560px] flex flex-col bg-[#121620] relative">
-      {/* Quotex Asset Tabs */}
-      <AssetTabs onOpenSelector={() => setShowAssetSelector(true)} />
+    <div className="h-[calc(100vh-60px)] min-h-[560px] flex flex-col bg-base-950">
+      <div className="flex items-stretch bg-base-900 shrink-0">
+        <div className="flex-1 min-w-0"><AssetTabs onOpenSelector={openSelector} /></div>
+        {!showTrades && (
+          <button onClick={() => setShowTrades(true)} className="px-4 text-[12px] font-semibold text-fog hover:text-ink1 border-l border-b border-white/10 flex items-center gap-1.5">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 6h16M4 12h16M4 18h10" /></svg>
+            Trades
+          </button>
+        )}
+      </div>
 
-      {/* Asset Selector Modal */}
       <AssetSelectorModal isOpen={showAssetSelector} onClose={() => setShowAssetSelector(false)} />
 
       {/* Live Algorithmic Trading Signals Drawer */}
@@ -324,9 +336,8 @@ export function Trading() {
       {/* Fast 1-Click Trading & Customization Settings Modal */}
       <SettingsModal />
 
-      {/* Full-bleed Quotex layout: [Chart 100% height] [Right Ticket + Trades Rail] */}
-      <div className="flex-1 grid grid-cols-[minmax(0,1fr)_310px] min-h-0 relative">
-        {/* Full-height Quotex Candlestick Chart */}
+      {/* [chart] [ticket] [trades] */}
+      <div className={clsx('flex-1 grid min-h-0', showTrades ? 'grid-cols-[minmax(0,1fr)_280px_280px]' : 'grid-cols-[minmax(0,1fr)_280px]')}>
         <div className="h-full w-full relative min-h-0 overflow-hidden">
           <PriceChart />
 
@@ -355,14 +366,14 @@ export function Trading() {
             </button>
           </div>
         </div>
-
-        {/* Right Rail: Quotex Ticket + Open Trades */}
-        <div className="border-l border-white/10 bg-[#161a25] min-h-0 overflow-hidden grid grid-rows-[minmax(0,1.8fr)_minmax(0,1fr)]">
-          <div className="min-h-0 overflow-hidden">
-            <Ticket />
-          </div>
-          <RailTabs />
+        <div className="border-l border-line min-h-0 overflow-hidden">
+          <Ticket />
         </div>
+        {showTrades && (
+          <div className="border-l border-line min-h-0 overflow-hidden">
+            <TradesPanel onClose={() => setShowTrades(false)} />
+          </div>
+        )}
       </div>
     </div>
   );

@@ -2,7 +2,27 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: dark; }
+/* palette as RGB triplets — consumed by tailwind.config.js. Public site: forest editorial theme. */
+:root {
+  color-scheme: dark;
+  --c-base-950: 18 23 18; --c-base-900: 26 33 27; --c-base-850: 35 44 36; --c-base-800: 38 47 40; --c-base-700: 53 65 53; --c-base-600: 76 91 74;
+  --c-accent-200: 220 233 220; --c-accent-300: 169 204 175; --c-accent-400: 95 168 120; --c-accent-500: 53 133 90; --c-accent-600: 35 107 69; --c-accent-700: 26 74 49;
+  --c-cream: 246 241 228;
+  --c-up: 60 177 121; --c-updim: 28 58 42; --c-down: 212 105 78; --c-downdim: 61 35 27; --c-warn: 211 168 60;
+  --c-fog: 169 181 164; --c-mute: 110 123 106; --c-ink1: 239 231 211; --c-line: 45 56 46;
+}
+
+/* Signed-in app: Quotex-style navy terminal with blue accent, green up / red down. */
+.theme-qx {
+  --c-base-950: 18 22 32; --c-base-900: 22 26 37; --c-base-850: 30 36 50; --c-base-800: 34 41 56; --c-base-700: 46 54 72; --c-base-600: 64 74 96;
+  --c-accent-200: 204 228 255; --c-accent-300: 102 176 255; --c-accent-400: 51 149 255; --c-accent-500: 0 122 255; --c-accent-600: 0 105 219; --c-accent-700: 0 82 171;
+  --c-cream: 255 255 255;
+  --c-up: 0 192 118; --c-updim: 10 58 42; --c-down: 255 84 71; --c-downdim: 66 26 26; --c-warn: 234 179 8;
+  --c-fog: 164 174 194; --c-mute: 112 122 145; --c-ink1: 236 240 247; --c-line: 40 46 62;
+}
+.theme-qx, .theme-qx * { scrollbar-color: #2e3648 transparent; }
+.theme-qx .font-display { font-family: Inter, system-ui, sans-serif; font-weight: 700; }
+.theme-qx *::-webkit-scrollbar-thumb { background: #2e3648; }
 html, body, #root { height: 100%; }
 body {
   @apply bg-base-950 text-ink1 font-sans antialiased;

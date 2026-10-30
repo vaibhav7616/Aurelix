@@ -10,7 +10,7 @@ import { useTerminal, serverNow, type Tick, type LiveCandle } from '../../stores
 import { useSettingsStore } from '../../stores/settingsStore';
 import { fmtPrice, fmtMoney } from '../../lib/format';
 import { normalizeCandles } from '../../lib/candles';
-import { fmtHMS, secondsLeft, previewOutcome, payoutFor, type OptionTrade, type OptionStatus } from '../../lib/options';
+import { fmtHMS, secondsLeft, previewOutcome, payoutFor, type OptionTrade, type OptionStatus, type OptionsConfig } from '../../lib/options';
 import { getAssetMeta } from '../../lib/assetMeta';
 import { connectSocket, subscribeMarket } from '../../services/socket';
 import { clsx } from 'clsx';
@@ -358,40 +358,16 @@ export function PriceChart() {
     refetchInterval: 2500,
   });
   const symTrades = useMemo(() => (openTrades ?? []).filter((t) => t.symbol === symbol), [openTrades, symbol]);
-
-  // Dynamic Crowd Trading Sentiment (Quotex Left Sentiment Bar)
-  const sentiment = useMemo(() => {
-    if (symTrades.length > 0) {
-      const upStake = symTrades.filter((t) => t.direction === 'UP').reduce((a, b) => a + Number(b.stake), 0);
-      const downStake = symTrades.filter((t) => t.direction === 'DOWN').reduce((a, b) => a + Number(b.stake), 0);
-      const total = upStake + downStake;
-      if (total > 0) {
-        const upPct = Math.round((upStake / total) * 100);
-        const up = Math.max(12, Math.min(88, upPct));
-        return { up, down: 100 - up };
-      }
-    }
-    const list = liveCandlesRef.current;
-    if (list.length >= 5) {
-      const recent = list.slice(-14);
-      let greenCount = 0;
-      let bullishWeight = 0;
-      recent.forEach((c) => {
-        if (c.close >= c.open) {
-          greenCount++;
-          bullishWeight += (c.close - c.open) / (c.high - c.low || 1);
-        } else {
-          bullishWeight -= (c.open - c.close) / (c.high - c.low || 1);
-        }
-      });
-      const ratio = greenCount / recent.length;
-      const basePct = Math.round(ratio * 40 + 30 + Math.max(-10, Math.min(10, bullishWeight * 3)));
-      const up = Math.max(25, Math.min(75, basePct));
-      return { up, down: 100 - up };
-    }
-    return { up: 59, down: 41 };
-  }, [symTrades, rev]);
-
+  const { data: sentiment } = useQuery({
+    queryKey: ['sentiment', symbol],
+    queryFn: () => get<{ upPct: number; samples: number }>('/api/v1/options/sentiment', { symbol }),
+    refetchInterval: 10000,
+  });
+  const upPct = Math.min(100, Math.max(0, sentiment?.upPct ?? 50));
+  const { data: optCfg } = useQuery({ queryKey: ['options-config'], queryFn: () => get<OptionsConfig>('/api/v1/options/config'), refetchInterval: 30000 });
+  const pendingDurationSec = useTerminal((s) => s.pendingDurationSec);
+  const previewExpiry = useTerminal((s) => s.previewExpiry);
+  const hoverDir = useTerminal((s) => s.hoverDir);
   const [clock, setClock] = useState(Date.now());
 
   // 1-second ticker ensures active trade countdowns tick down continuously
@@ -639,8 +615,8 @@ export function PriceChart() {
           oscRefs.current.push(s);
         };
         mk(80); mk(50); mk(20);
-        const kSeries = chart.addLineSeries({ color: '#00c076', lineWidth: 1.5, priceScaleId: 'osc', priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-        const dSeries = chart.addLineSeries({ color: '#ff5447', lineWidth: 1.5, lineStyle: LineStyle.Dashed, priceScaleId: 'osc', priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+        const kSeries = chart.addLineSeries({ color: '#00c076', lineWidth: 2, priceScaleId: 'osc', priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+        const dSeries = chart.addLineSeries({ color: '#ff5447', lineWidth: 2, lineStyle: LineStyle.Dashed, priceScaleId: 'osc', priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
         const kPts: Array<{ time: Time; value: number }> = [];
         const dPts: Array<{ time: Time; value: number }> = [];
         vals.forEach((v, i) => {
@@ -1199,7 +1175,7 @@ export function PriceChart() {
 
   // Projected trade window when no trade is open (Quotex displays projected Beginning & End of trade)
   const projectedTradeLines = useMemo(() => {
-    if (symTrades.length > 0) return null;
+    if (symTrades.length > 0 && !hoverDir) return null;
     const chart = chartRef.current;
     if (!chart || !elRef.current) return null;
     const W = elRef.current.clientWidth;
@@ -1208,8 +1184,7 @@ export function PriceChart() {
     if (!list.length) return null;
 
     const nowSec = Math.floor(serverNow() / 1000);
-    const durSec = Number(localStorage.getItem('ax_opt_dur') ?? 60);
-    const endSec = nowSec + durSec;
+    const endSec = previewExpiry ? Math.floor(previewExpiry / 1000) : nowSec + pendingDurationSec;
 
     const lastT = list[list.length - 1].openTime / 1000;
     const lastX = ts.timeToCoordinate(lastT as Time);
@@ -1229,7 +1204,7 @@ export function PriceChart() {
       x2: Math.min(Math.max(0, x2), W - priceScaleW),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symTrades.length, timeframe, rev, clock]);
+  }, [symTrades.length, timeframe, rev, clock, hoverDir, previewExpiry, pendingDurationSec]);
 
   const drawColor = (type: DrawType) => (type === 'support' ? UP : type === 'resistance' ? DOWN : type === 'trend' ? ACC : '#7A8776');
 
@@ -1322,27 +1297,14 @@ export function PriceChart() {
         </button>
       </div>
 
-      {/* Quotex Left Edge Sentiment Bar (Dynamic Crowd Sentiment) */}
-      <div
-        className="absolute left-2.5 top-1/2 -translate-y-1/2 z-10 flex flex-col items-center bg-[#171c26]/90 border border-white/10 rounded-md py-1.5 px-1 shadow-lg pointer-events-auto select-none group cursor-pointer transition-transform hover:scale-105"
-        title={`Crowd Sentiment: ${sentiment.up}% Call (Green) / ${sentiment.down}% Put (Red)`}
-      >
-        <span className="text-[9.5px] font-black text-[#00c076] leading-none mb-1 font-mono transition-all duration-300">
-          {sentiment.up}%
-        </span>
-        <div className="w-1.5 h-28 rounded-full bg-base-800 flex flex-col overflow-hidden relative">
-          <div
-            className="w-full bg-[#00c076] transition-all duration-500 ease-out"
-            style={{ height: `${sentiment.up}%` }}
-          />
-          <div
-            className="w-full bg-[#ff5447] transition-all duration-500 ease-out"
-            style={{ height: `${sentiment.down}%` }}
-          />
+      {/* Trader sentiment: share of Up vs Down trades on this asset over the last 30 min (server) */}
+      <div title={sentiment?.samples ? `${sentiment.samples} trades in the last 30 min` : 'No recent trades — neutral'} className="absolute left-2.5 top-1/2 -translate-y-1/2 z-10 flex flex-col items-center bg-[#171c26]/90 border border-white/10 rounded-md py-1.5 px-1 shadow-lg select-none">
+        <span className="text-[9.5px] font-black text-[#00c076] leading-none mb-1">{upPct}%</span>
+        <div className="w-1.5 h-28 rounded-full bg-base-800 flex flex-col overflow-hidden">
+          <div className="w-full bg-[#00c076] transition-all duration-700" style={{ height: `${upPct}%` }} />
+          <div className="w-full bg-[#ff5447] transition-all duration-700" style={{ height: `${100 - upPct}%` }} />
         </div>
-        <span className="text-[9.5px] font-black text-[#ff5447] leading-none mt-1 font-mono transition-all duration-300">
-          {sentiment.down}%
-        </span>
+        <span className="text-[9.5px] font-black text-[#ff5447] leading-none mt-1">{100 - upPct}%</span>
       </div>
 
       {/* Drawing Overlay */}
@@ -1392,7 +1354,7 @@ export function PriceChart() {
             const { x1, x2 } = projectedTradeLines;
             return (
               <g>
-                <rect x={Math.min(x1, x2)} y={0} width={Math.abs(x2 - x1)} height={H} fill="#ffffff" opacity={0.02} />
+                <rect x={Math.min(x1, x2)} y={0} width={Math.abs(x2 - x1)} height={H} fill={hoverDir === 'UP' ? '#00c076' : hoverDir === 'DOWN' ? '#ff5447' : '#ffffff'} opacity={hoverDir ? 0.1 : 0.02} />
                 {/* Beginning of trade line */}
                 <line x1={x1} y1={0} x2={x1} y2={H} stroke="#ffffff" strokeWidth={1} strokeDasharray="3 3" opacity={0.4} />
                 <text x={x1 - 4} y={32} textAnchor="end" fill="#cbd5e1" fontSize={9.5} fontFamily="Inter, system-ui" fontWeight={600} opacity={0.85}>
@@ -1922,7 +1884,7 @@ export function PriceChart() {
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div className="bg-base-900/80 p-2.5 rounded-lg border border-white/5">
                 <div className="text-slate-400 text-[10px] uppercase font-bold">Payout Rate</div>
-                <div className="text-[#eab308] font-black text-base mt-0.5">{assetInfo.defaultPayout}%</div>
+                <div className="text-[#eab308] font-black text-base mt-0.5">{optCfg?.assets.find((a) => a.symbol === symbol)?.payoutPct ?? assetInfo.defaultPayout}%</div>
               </div>
               <div className="bg-base-900/80 p-2.5 rounded-lg border border-white/5">
                 <div className="text-slate-400 text-[10px] uppercase font-bold">Category</div>

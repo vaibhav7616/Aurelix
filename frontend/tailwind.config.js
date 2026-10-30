@@ -1,36 +1,25 @@
 /** Aurelix editorial dark theme — deep forest canvas, cream ink, luminous green/gold/brick. */
+const v = (name) => `rgb(var(--c-${name}) / <alpha-value>)`;
+
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
+      // colors are CSS variables (see index.css) so the signed-in app can switch palettes via `.theme-qx`
       colors: {
-        base: {
-          950: '#121712', // app canvas (deep forest black)
-          900: '#1A211B', // panels
-          850: '#232C24', // raised / bright
-          800: '#262F28', // inputs
-          700: '#354135', // active / strong
-          600: '#4C5B4A',
-        },
-        accent: {
-          200: '#DCE9DC',
-          300: '#A9CCAF',
-          400: '#5FA878',
-          500: '#35855A',
-          600: '#236B45', // primary green
-          700: '#1A4A31',
-        },
-        cream: '#F6F1E4', // text on green
-        up: '#3CB179',
-        updim: '#1C3A2A',
-        down: '#D4694E', // bright brick
-        downdim: '#3D231B',
-        warn: '#D3A83C', // bright gold
-        fog: '#A9B5A4',
-        mute: '#6E7B6A',
-        ink1: '#EFE7D3',
-        line: '#2D382E',
+        base: { 950: v('base-950'), 900: v('base-900'), 850: v('base-850'), 800: v('base-800'), 700: v('base-700'), 600: v('base-600') },
+        accent: { 200: v('accent-200'), 300: v('accent-300'), 400: v('accent-400'), 500: v('accent-500'), 600: v('accent-600'), 700: v('accent-700') },
+        cream: v('cream'),
+        up: v('up'),
+        updim: v('updim'),
+        down: v('down'),
+        downdim: v('downdim'),
+        warn: v('warn'),
+        fog: v('fog'),
+        mute: v('mute'),
+        ink1: v('ink1'),
+        line: v('line'),
       },
       fontFamily: {
         display: ['Fraunces', '"Iowan Old Style"', '"Palatino Linotype"', 'Palatino', 'Georgia', 'serif'],

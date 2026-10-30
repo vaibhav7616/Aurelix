@@ -4,7 +4,7 @@ import { clsx } from 'clsx';
 export function Toasts() {
   const { toasts, dismiss } = useUI();
   return (
-    <div className="fixed bottom-4 right-4 z-[100] space-y-2 w-[330px] max-w-[calc(100vw-2rem)]">
+    <div className="fixed top-[100px] left-1/2 -translate-x-1/2 z-[100] space-y-2 w-[330px] max-w-[calc(100vw-2rem)]">
       {toasts.map((t) => (
         <button
           key={t.id}

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { get, post, apiError } from '../../lib/api';
 import { useTerminal, serverNow } from '../../stores/terminalStore';
@@ -21,6 +21,8 @@ function fmtClock(ms: number): string {
 }
 
 const STAKE_STEPS = [1, 5, 10, 25, 50, 100];
+const PCT_STEPS = [1, 2, 5, 10, 25, 50];
+const TIME_PRESETS = [5, 15, 30, 60, 120, 180, 300, 600, 900, 1800, 3600];
 
 function nextPreset(cur: number, dir: 1 | -1): number {
   const i = DURATION_PRESETS.findIndex((d) => d >= cur);
@@ -29,22 +31,51 @@ function nextPreset(cur: number, dir: 1 | -1): number {
     return DURATION_PRESETS[Math.min(DURATION_PRESETS.length - 1, DURATION_PRESETS[i] === cur ? i + 1 : i)];
   }
   if (i === -1) return DURATION_PRESETS[DURATION_PRESETS.length - 1];
-  return DURATION_PRESETS[Math.max(0, DURATION_PRESETS[i] === cur ? i - 1 : i - 1)];
+  return DURATION_PRESETS[Math.max(0, i - 1)];
 }
 function stepStake(cur: number, dir: 1 | -1): number {
   const step = cur >= 1000 ? 100 : cur >= 100 ? 10 : cur >= 20 ? 5 : 1;
   return Math.max(1, Math.round((cur + dir * step) * 100) / 100);
 }
+function stepPct(cur: number, dir: 1 | -1): number {
+  const step = cur >= 10 ? 5 : 1;
+  return Math.min(100, Math.max(1, cur + dir * step));
+}
+function isTyping(t: EventTarget | null): boolean {
+  return t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement;
+}
+
+function StepBtn({ onClick, children, title }: { onClick: () => void; children: string; title: string }) {
+  return (
+    <button onClick={onClick} title={title} className="w-8 h-8 rounded-md bg-base-700/80 hover:bg-base-600 text-ink1 font-bold text-lg leading-none flex items-center justify-center transition shrink-0 active:scale-95">
+      {children}
+    </button>
+  );
+}
+
+function Box({ label, action, children }: { label: string; action?: { text: string; onClick: () => void }; children: React.ReactNode }) {
+  return (
+    <div className="bg-base-800 border border-line rounded-xl px-3 pt-2 pb-2.5">
+      <div className="flex items-center justify-between text-[11px] text-mute font-medium mb-1">
+        <span>{label}</span>
+        {action && <button onClick={action.onClick} className="text-[10px] text-accent-400 hover:text-accent-300 font-bold tracking-wide">{action.text}</button>}
+      </div>
+      {children}
+    </div>
+  );
+}
 
 export function Ticket() {
-  const { symbol, ticks, accountId, pendingTrade, setPendingTrade } = useTerminal();
+  const { symbol, ticks, accountId, pendingTrade, setPendingTrade, setPendingDuration, setPreviewExpiry, setHoverDir } = useTerminal();
   const push = useUI((s) => s.push);
   const qc = useQueryClient();
-  const [durationSec, setDurationSec] = useState<number>(() => Number(localStorage.getItem('ax_opt_dur') ?? 60));
-  const [stake, setStake] = useState<number>(() => Number(localStorage.getItem('ax_opt_stake') ?? 1));
+  const [durationSec, setDurationSec] = useState<number>(() => Number(localStorage.getItem('ax_opt_dur') ?? 60) || 60);
+  const [stake, setStake] = useState<number>(() => Number(localStorage.getItem('ax_opt_stake') ?? 1) || 1);
+  // Investment SWITCH: fixed amount ($) or percent of available balance (%)
+  const [stakeMode, setStakeMode] = useState<'USD' | 'PCT'>(() => (localStorage.getItem('ax_opt_stake_mode') === 'PCT' ? 'PCT' : 'USD'));
+  const [stakePct, setStakePct] = useState<number>(() => Number(localStorage.getItem('ax_opt_stake_pct') ?? 1) || 1);
   const [stakeInput, setStakeInput] = useState<string | null>(null);
   const [showTimePresets, setShowTimePresets] = useState(false);
-  const [showStakePresets, setShowStakePresets] = useState(false);
   const [targetPrice, setTargetPrice] = useState<string>('');
   const [err, setErr] = useState<string | null>(null);
   const [flash, setFlash] = useState<Direction | null>(null);
@@ -54,37 +85,47 @@ export function Ticket() {
   const armedSignal = useSignalsStore((s) => s.armedSignal);
   const armSignal = useSignalsStore((s) => s.armSignal);
 
+  const { data: accounts } = useQuery({ queryKey: ['accounts'], queryFn: () => get<Account[]>('/api/v1/accounts') });
+  const { data: cfg } = useQuery({ queryKey: ['options-config'], queryFn: () => get<OptionsConfig>('/api/v1/options/config'), refetchInterval: 30000 });
+  const leadSec = cfg?.fixedTimeMinLeadSec ?? FIXED_TIME_MIN_LEAD_SEC;
+  const leadRef = useRef(leadSec);
+  leadRef.current = leadSec;
+
   // Expiry mode (Quotex "SWITCH TIME"): TIMER = duration from open, TIME = fixed clock minute
   const [mode, setMode] = useState<ExpiryMode>(() => (localStorage.getItem('ax_opt_mode') === 'TIME' ? 'TIME' : 'TIMER'));
   const [fixedExpiry, setFixedExpiry] = useState<number>(() => nextFixedExpiry(serverNow()));
-  useEffect(() => { localStorage.setItem('ax_opt_mode', mode); }, [mode]);
-  // purchases for a minute close FIXED_TIME_MIN_LEAD_SEC before it — roll forward like Quotex does
+  // purchases for a minute close leadSec before it — roll forward like Quotex does
   useEffect(() => {
     if (mode !== 'TIME') return;
     const t = setInterval(() => {
-      const min = nextFixedExpiry(serverNow(), cfg?.fixedTimeMinLeadSec ?? FIXED_TIME_MIN_LEAD_SEC);
+      const min = nextFixedExpiry(serverNow(), leadRef.current);
       setFixedExpiry((cur) => (cur < min ? min : cur));
     }, 500);
     return () => clearInterval(t);
-  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mode]);
 
-  useEffect(() => { localStorage.setItem('ax_opt_dur', String(durationSec)); }, [durationSec]);
+  useEffect(() => { localStorage.setItem('ax_opt_mode', mode); }, [mode]);
+  useEffect(() => { localStorage.setItem('ax_opt_dur', String(durationSec)); setPendingDuration(durationSec); }, [durationSec, setPendingDuration]);
+  useEffect(() => { setPreviewExpiry(mode === 'TIME' ? fixedExpiry : null); }, [mode, fixedExpiry, setPreviewExpiry]);
+  useEffect(() => () => { setPreviewExpiry(null); setHoverDir(null); }, [setPreviewExpiry, setHoverDir]);
   useEffect(() => { localStorage.setItem('ax_opt_stake', String(stake)); }, [stake]);
+  useEffect(() => { localStorage.setItem('ax_opt_stake_mode', stakeMode); }, [stakeMode]);
+  useEffect(() => { localStorage.setItem('ax_opt_stake_pct', String(stakePct)); }, [stakePct]);
 
-  const { data: accounts } = useQuery({ queryKey: ['accounts'], queryFn: () => get<Account[]>('/api/v1/accounts') });
-  const { data: cfg } = useQuery({ queryKey: ['options-config'], queryFn: () => get<OptionsConfig>('/api/v1/options/config'), refetchInterval: 30000 });
   const account = accounts?.find((a) => a.id === accountId) ?? accounts?.[0];
   const meta = cfg?.assets.find((a) => a.symbol === symbol);
   const assetInfo = getAssetMeta(symbol);
   const tick = ticks[symbol];
   const payoutPct = meta?.payoutPct ?? assetInfo.defaultPayout ?? 80;
-  const payout = useMemo(() => payoutFor(stake, payoutPct), [stake, payoutPct]);
+  const available = (account?.balance ?? 0) - (account?.lockedBalance ?? 0); // pending trades reserve their stake
+  const effStake = stakeMode === 'PCT' ? Math.floor(available * stakePct) / 100 : stake;
+  const payout = useMemo(() => payoutFor(effStake, payoutPct), [effStake, payoutPct]);
 
   const open = useMutation({
     mutationFn: (direction: Direction) =>
       post<OptionTrade & { balance: number }>(
         '/api/v1/options',
-        { accountId: account?.id, symbol, direction, stake, ...(mode === 'TIME' ? { expiresAt: fixedExpiry } : { durationSec }) },
+        { accountId: account?.id, symbol, direction, stake: effStake, ...(mode === 'TIME' ? { expiresAt: fixedExpiry } : { durationSec }) },
         { 'Idempotency-Key': crypto.randomUUID() },
       ),
     onSuccess: (o) => {
@@ -113,7 +154,7 @@ export function Ticket() {
 
   const placePending = useMutation({
     mutationFn: (direction: Direction) =>
-      post<PendingTrade>('/api/v1/options/pending', { accountId: account?.id, symbol, direction, stake, durationSec, targetPrice: Number(targetPrice) }),
+      post<PendingTrade>('/api/v1/options/pending', { accountId: account?.id, symbol, direction, stake: effStake, durationSec, targetPrice: Number(targetPrice) }),
     onSuccess: (p) => {
       soundService.playTradePlaced();
       setErr(null);
@@ -127,7 +168,14 @@ export function Ticket() {
     },
   });
 
+  const minS = meta?.minStake ?? cfg?.minStake ?? 1;
+  const maxS = meta?.maxStake ?? cfg?.maxStake ?? 50000;
+  const halted = !!meta && !meta.enabled;
+  const invalid = !account || halted || effStake <= 0 || effStake < minS || effStake > maxS || effStake > available;
+  const busy = open.isPending || placePending.isPending;
+
   const submit = (direction: Direction) => {
+    if (busy || invalid) return;
     if (!oneClickTrading && !confirmDir) {
       setConfirmDir(direction);
       return;
@@ -135,9 +183,7 @@ export function Ticket() {
     setConfirmDir(null);
     if (!pendingTrade) {
       open.mutate(direction);
-      if (armedSignal && armedSignal.symbol === symbol) {
-        armSignal(null);
-      }
+      if (armedSignal && armedSignal.symbol === symbol) armSignal(null);
       return;
     }
     if (mode === 'TIME') { setErr('Pending trades use Timer mode — press SWITCH TIME'); return; }
@@ -148,34 +194,73 @@ export function Ticket() {
 
   const shiftFixed = (dir: 1 | -1) => setFixedExpiry((cur) => {
     const now = serverNow();
-    const min = nextFixedExpiry(now, cfg?.fixedTimeMinLeadSec ?? FIXED_TIME_MIN_LEAD_SEC);
+    const min = nextFixedExpiry(now, leadSec);
     return Math.min(now + MAX_FIXED_AHEAD_MS, Math.max(min, cur + dir * 60_000));
   });
-  const handleMinusTime = () => { soundService.playClick(); if (mode === 'TIME') shiftFixed(-1); else setDurationSec((d) => nextPreset(d, -1)); };
-  const handlePlusTime = () => { soundService.playClick(); if (mode === 'TIME') shiftFixed(1); else setDurationSec((d) => nextPreset(d, 1)); };
-  const handleMinusStake = () => { soundService.playClick(); setStake((s) => stepStake(s, -1)); };
-  const handlePlusStake = () => { soundService.playClick(); setStake((s) => stepStake(s, 1)); };
+  const shiftTime = (dir: 1 | -1) => { soundService.playClick(); if (mode === 'TIME') shiftFixed(dir); else setDurationSec((d) => nextPreset(d, dir)); };
+  const shiftStake = (dir: 1 | -1) => { soundService.playClick(); if (stakeMode === 'PCT') setStakePct((p) => stepPct(p, dir)); else setStake((s) => stepStake(s, dir)); };
 
-  const minS = meta?.minStake ?? cfg?.minStake ?? 1;
-  const maxS = meta?.maxStake ?? cfg?.maxStake ?? 50000;
-  const available = (account?.balance ?? 0) - (account?.lockedBalance ?? 0); // pending trades reserve their stake
-  const invalid = !account || (meta && !meta.enabled) || stake <= 0 || stake < minS || stake > maxS || stake > available;
-  const busy = open.isPending || placePending.isPending;
+  // Quotex hotkeys: Shift+W up · Shift+S down · Shift+A/D investment −/+ · Shift+Q/E time −/+
+  const keyRef = useRef({ submit, shiftTime, shiftStake });
+  keyRef.current = { submit, shiftTime, shiftStake };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || e.repeat || isTyping(e.target)) return;
+      const k = keyRef.current;
+      const map: Record<string, () => void> = {
+        KeyW: () => k.submit('UP'), KeyS: () => k.submit('DOWN'),
+        KeyA: () => k.shiftStake(-1), KeyD: () => k.shiftStake(1),
+        KeyQ: () => k.shiftTime(-1), KeyE: () => k.shiftTime(1),
+      };
+      const fn = map[e.code];
+      if (fn) { e.preventDefault(); fn(); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
 
-  const isArmedUp = armedSignal?.symbol === symbol && armedSignal?.direction === 'UP';
-  const isArmedDown = armedSignal?.symbol === symbol && armedSignal?.direction === 'DOWN';
+  const commitStakeInput = () => {
+    const v = parseFloat(stakeInput ?? '');
+    if (Number.isFinite(v) && v > 0) {
+      if (stakeMode === 'PCT') setStakePct(Math.min(100, Math.max(1, Math.round(v))));
+      else setStake(Math.round(v * 100) / 100);
+    }
+    setStakeInput(null);
+  };
+
+  const dirBtn = (d: Direction) => {
+    const up = d === 'UP';
+    return (
+      <button
+        onClick={() => submit(d)}
+        onMouseEnter={() => setHoverDir(d)}
+        onMouseLeave={() => setHoverDir(null)}
+        disabled={busy || invalid}
+        title={up ? 'Up (Shift+W)' : 'Down (Shift+S)'}
+        className={clsx(
+          'w-full h-14 rounded-xl text-white font-extrabold text-[16px] flex items-center justify-between px-5 transition active:scale-[0.98] disabled:opacity-50 disabled:active:scale-100',
+          up ? 'bg-up hover:brightness-110 shadow-[0_6px_20px_-8px_rgb(var(--c-up))]' : 'bg-down hover:brightness-110 shadow-[0_6px_20px_-8px_rgb(var(--c-down))]',
+          flash === d && 'brightness-125',
+          armedSignal?.symbol === symbol && armedSignal?.direction === d && 'ring-2 ring-offset-2 ring-offset-base-900 animate-pulse ' + (up ? 'ring-emerald-400' : 'ring-rose-400'),
+        )}
+      >
+        <span>{up ? 'Up' : 'Down'}</span>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+          {up ? <path d="M7 17L17 7M9 7h8v8" /> : <path d="M7 7l10 10M17 9v8H9" />}
+        </svg>
+      </button>
+    );
+  };
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-base-900 border-l border-line select-none">
-      {/* Quotex header: pair + payout */}
-      <div className="px-4 py-3 border-b border-line">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-base leading-none shrink-0">{assetInfo.flag1}{assetInfo.flag2}</span>
-            <span className="text-[15px] font-extrabold tracking-tight truncate text-white">{symbol}</span>
-          </div>
-          <span className="ax-num text-[16px] font-black text-[#eab308] bg-[#eab308]/10 px-2 py-0.5 rounded">{payoutPct}%</span>
+    <div className="flex flex-col h-full min-h-0 bg-base-900 select-none">
+      {/* asset + payout */}
+      <div className="px-4 pt-3 pb-2 flex items-center justify-between">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-base leading-none shrink-0">{assetInfo.flag1}{assetInfo.flag2}</span>
+          <span className="text-[14px] font-bold truncate">{symbol}</span>
         </div>
+        <span className="text-[13px] font-bold ax-num text-up">{payoutPct}%</span>
       </div>
 
       {/* Armed Algorithmic Signal Indicator Banner */}
@@ -200,120 +285,60 @@ export function Ticket() {
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-        {/* PENDING TRADE switch (Quotex feature) */}
-        <div className="flex items-center justify-between px-1 py-1">
-          <span className="text-[11px] font-bold text-fog uppercase tracking-wider">Pending trade</span>
-          <button
-            onClick={() => { soundService.playClick(); setPendingTrade(!pendingTrade); }}
-            className={clsx('w-9 h-5 rounded-full transition-colors relative', pendingTrade ? 'bg-[#007aff]' : 'bg-base-700')}
-          >
-            <span className={clsx('absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform', pendingTrade ? 'left-4.5' : 'left-0.5')} />
-          </button>
-        </div>
-
-        {pendingTrade && (
-          <div className="bg-base-800/90 border border-line rounded-lg p-2.5 space-y-2">
-            <div className="text-[10px] text-mute font-semibold uppercase">Execution by Price</div>
-            <div className="flex items-center gap-2">
-              <input
-                value={targetPrice}
-                onChange={(e) => setTargetPrice(e.target.value)}
-                placeholder={tick ? `Target: ${fmtPrice(tick.mid)}` : 'Target price'}
-                className="ax-input !h-7 !text-xs"
-              />
-            </div>
-          </div>
-        )}
-
-        {/* TIME STEPPER (Quotex signature style) */}
-        <div className="bg-base-800/80 border border-line rounded-lg px-3 py-2.5">
-          <div className="flex items-center justify-between text-[11px] text-mute font-medium mb-1.5">
-            <span>{mode === 'TIME' ? 'Time' : 'Timer'}</span>
-            <button onClick={() => { soundService.playClick(); setShowTimePresets(false); setMode((m) => (m === 'TIME' ? 'TIMER' : 'TIME')); }} className="text-[10px] text-[#007aff] hover:underline font-semibold">
-              SWITCH TIME
-            </button>
-          </div>
-          <div className="flex items-center justify-between gap-2">
+      <div className="flex-1 overflow-y-auto px-4 pb-2 space-y-2.5">
+        {/* TIME */}
+        <Box label={mode === 'TIME' ? 'Time' : 'Timer'} action={{ text: 'SWITCH TIME', onClick: () => { soundService.playClick(); setShowTimePresets(false); setMode((m) => (m === 'TIME' ? 'TIMER' : 'TIME')); } }}>
+          <div className="flex items-center gap-2">
+            <StepBtn onClick={() => shiftTime(-1)} title="Shift+Q">−</StepBtn>
             <button
-              onClick={handleMinusTime}
-              className="w-8 h-8 rounded bg-base-700 hover:bg-base-600 text-white font-bold text-lg flex items-center justify-center transition shrink-0 active:scale-95"
-            >
-              −
-            </button>
-            <div
-              onClick={() => { if (mode === 'TIMER') setShowTimePresets(!showTimePresets); }}
-              className={clsx('flex-1 text-center font-mono text-[17px] font-extrabold tracking-tight text-white', mode === 'TIMER' && 'cursor-pointer')}
+              onClick={() => { if (mode === 'TIMER') setShowTimePresets((v) => !v); }}
+              className={clsx('flex-1 text-center font-mono text-[18px] font-bold tracking-tight', mode === 'TIMER' ? 'cursor-pointer hover:text-accent-300' : 'cursor-default')}
             >
               {mode === 'TIME' ? fmtClock(fixedExpiry) : fmtHMS(durationSec)}
-            </div>
-            <button
-              onClick={handlePlusTime}
-              className="w-8 h-8 rounded bg-base-700 hover:bg-base-600 text-white font-bold text-lg flex items-center justify-center transition shrink-0 active:scale-95"
-            >
-              +
             </button>
+            <StepBtn onClick={() => shiftTime(1)} title="Shift+E">+</StepBtn>
           </div>
-          {/* Quick Expiry Presets */}
-          {mode === 'TIMER' && (
-            <div className="grid grid-cols-6 gap-1 mt-2.5 pt-2 border-t border-line">
-              {[5, 15, 30, 60, 120, 300].map((d) => (
+          {mode === 'TIMER' && showTimePresets && (
+            <div className="grid grid-cols-4 gap-1 mt-2 pt-2 border-t border-line">
+              {TIME_PRESETS.map((d) => (
                 <button
                   key={d}
-                  onClick={() => { soundService.playClick(); setDurationSec(d); }}
-                  className={clsx('h-6 rounded text-[10px] font-bold transition font-mono', durationSec === d ? 'bg-[#007aff] text-white shadow-sm' : 'bg-base-700/80 text-fog hover:text-white hover:bg-base-700')}
+                  onClick={() => { soundService.playClick(); setDurationSec(d); setShowTimePresets(false); }}
+                  className={clsx('h-7 rounded-md text-[11px] font-bold transition font-mono', durationSec === d ? 'bg-accent-500 text-white' : 'bg-base-700/70 text-fog hover:text-ink1')}
                 >
-                  {d < 60 ? `${d}s` : `${d / 60}m`}
+                  {d < 60 ? `${d}s` : d < 3600 ? `${d / 60}m` : `${d / 3600}h`}
                 </button>
               ))}
             </div>
           )}
-        </div>
+          {mode === 'TIME' && <div className="text-[10px] text-mute text-center mt-1">Purchases close {leadSec}s before expiry</div>}
+        </Box>
 
-        {/* INVESTMENT STEPPER (Quotex signature style) */}
-        <div className="bg-base-800/80 border border-line rounded-lg px-3 py-2.5">
-          <div className="flex items-center justify-between text-[11px] text-mute font-medium mb-1.5">
-            <span>Investment</span>
-            <button onClick={() => setShowStakePresets(!showStakePresets)} className="text-[10px] text-[#007aff] hover:underline font-semibold">
-              SWITCH
-            </button>
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <button
-              onClick={handleMinusStake}
-              className="w-8 h-8 rounded bg-base-700 hover:bg-base-600 text-white font-bold text-lg flex items-center justify-center transition shrink-0 active:scale-95"
-            >
-              −
-            </button>
-            <div className="flex-1 text-center font-mono text-[17px] font-extrabold tracking-tight text-white">
+        {/* INVESTMENT */}
+        <Box label="Investment" action={{ text: stakeMode === 'PCT' ? 'SWITCH TO $' : 'SWITCH TO %', onClick: () => { soundService.playClick(); setStakeInput(null); setStakeMode((m) => (m === 'PCT' ? 'USD' : 'PCT')); } }}>
+          <div className="flex items-center gap-2">
+            <StepBtn onClick={() => shiftStake(-1)} title="Shift+A">−</StepBtn>
+            <div className="flex-1 text-center font-mono text-[18px] font-bold tracking-tight">
               {stakeInput !== null ? (
                 <input
                   value={stakeInput}
                   autoFocus
                   onChange={(e) => setStakeInput(e.target.value.replace(/[^0-9.]/g, ''))}
-                  onBlur={() => {
-                    const v = parseFloat(stakeInput);
-                    if (Number.isFinite(v) && v > 0) setStake(Math.round(v * 100) / 100);
-                    setStakeInput(null);
-                  }}
-                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-                  className="w-20 bg-transparent text-center outline-none border-b border-[#007aff]"
+                  onBlur={commitStakeInput}
+                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setStakeInput(null); }}
+                  className="w-24 bg-transparent text-center outline-none border-b border-accent-500"
                 />
               ) : (
-                <span onClick={() => setStakeInput(String(stake))} className="cursor-pointer hover:text-accent-300">
-                  {stake} $
-                </span>
+                <button onClick={() => setStakeInput(String(stakeMode === 'PCT' ? stakePct : stake))} className="hover:text-accent-300">
+                  {stakeMode === 'PCT' ? `${stakePct}%` : `$${stake}`}
+                </button>
               )}
             </div>
-            <button
-              onClick={handlePlusStake}
-              className="w-8 h-8 rounded bg-base-700 hover:bg-base-600 text-white font-bold text-lg flex items-center justify-center transition shrink-0 active:scale-95"
-            >
-              +
-            </button>
+            <StepBtn onClick={() => shiftStake(1)} title="Shift+D">+</StepBtn>
           </div>
-
-          {/* Quotex Multipliers & Quick Action Chips */}
+          {stakeMode === 'PCT' && <div className="text-[10px] text-mute text-center mt-0.5 ax-num">= {fmtMoney(effStake)} of {fmtMoney(available)}</div>}
+          {/* ½ · 2× · Min · Max (USD mode) */}
+          {stakeMode === 'USD' && (
           <div className="grid grid-cols-4 gap-1 mt-2.5 pt-2 border-t border-line">
             <button
               onClick={() => { soundService.playClick(); setStake((s) => Math.max(minS, Math.round((s / 2) * 100) / 100)); }}
@@ -344,39 +369,62 @@ export function Ticket() {
               Max
             </button>
           </div>
-
-          {/* Quick Stake Direct Selection Chips */}
+          )}
           <div className="grid grid-cols-6 gap-1 mt-1.5">
-            {STAKE_STEPS.map((v) => (
-              <button
-                key={v}
-                onClick={() => { soundService.playClick(); setStake(v); }}
-                className={clsx('h-6 rounded text-[10px] font-bold transition font-mono active:scale-95', stake === v ? 'bg-[#007aff] text-white shadow-sm' : 'bg-base-700/60 text-fog hover:text-white hover:bg-base-700')}
-              >
-                ${v}
-              </button>
-            ))}
+            {(stakeMode === 'PCT' ? PCT_STEPS : STAKE_STEPS).map((v) => {
+              const sel = stakeMode === 'PCT' ? stakePct === v : stake === v;
+              return (
+                <button
+                  key={v}
+                  onClick={() => { soundService.playClick(); if (stakeMode === 'PCT') setStakePct(v); else setStake(v); }}
+                  className={clsx('h-6 rounded-md text-[10px] font-bold transition font-mono', sel ? 'bg-accent-500 text-white' : 'bg-base-700/70 text-fog hover:text-ink1')}
+                >
+                  {stakeMode === 'PCT' ? `${v}%` : `$${v}`}
+                </button>
+              );
+            })}
           </div>
-        </div>
+        </Box>
 
-        {/* PAYOUT DOTTED LINE (Exact Quotex format) */}
-        <div className="flex items-center justify-between text-xs px-1 py-1">
-          <span className="text-mute font-medium">Payout</span>
-          <div className="flex-1 mx-2 border-b border-dotted border-line" />
-          <span className="font-mono text-[15px] font-bold text-white">{payout.toFixed(2)} $</span>
+        {/* PENDING TRADE */}
+        <div className="rounded-xl border border-line px-3 py-2">
+          <button onClick={() => { soundService.playClick(); setPendingTrade(!pendingTrade); }} className="w-full flex items-center justify-between">
+            <span className="flex items-center gap-1.5 text-[12px] font-semibold text-fog">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
+              Pending trade
+            </span>
+            <span className={clsx('w-9 h-5 rounded-full transition-colors relative', pendingTrade ? 'bg-accent-500' : 'bg-base-700')}>
+              <span className={clsx('absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all', pendingTrade ? 'left-[18px]' : 'left-0.5')} />
+            </span>
+          </button>
+          {pendingTrade && (
+            <div className="mt-2 space-y-1">
+              <div className="text-[10px] text-mute">Open the trade when the price reaches:</div>
+              <div className="flex gap-1.5">
+                <input
+                  value={targetPrice}
+                  onChange={(e) => setTargetPrice(e.target.value.replace(/[^0-9.]/g, ''))}
+                  placeholder={tick ? fmtPrice(tick.mid) : 'Target price'}
+                  inputMode="decimal"
+                  className="ax-input !h-8 !text-xs font-mono"
+                />
+                {tick && <button onClick={() => setTargetPrice(String(tick.mid))} className="h-8 px-2 rounded-md bg-base-700 text-[10px] font-bold text-fog hover:text-ink1 shrink-0">Current</button>}
+              </div>
+            </div>
+          )}
         </div>
 
         <FieldError message={err} />
       </div>
 
-      {/* FOOTER: UP / DOWN BUTTONS (Quotex signature bold buttons) */}
-      <div className="shrink-0 px-4 pt-2.5 pb-4 border-t border-line space-y-2.5 bg-base-900">
+      {/* UP · payout · DOWN (Quotex order) */}
+      <div className="shrink-0 px-4 pt-2 pb-4 space-y-2">
         {/* 1-Click Disabled Confirmation Card */}
         {confirmDir && (
           <div className="p-3 rounded-xl bg-base-800 border border-amber-400/40 space-y-2 animate-in fade-in">
             <div className="text-xs font-bold text-amber-300 flex items-center justify-between">
               <span>Confirm {confirmDir === 'UP' ? 'CALL ▲' : 'PUT ▼'} Trade?</span>
-              <span className="text-white font-mono font-bold">{fmtMoney(stake)}</span>
+              <span className="text-white font-mono font-bold">{fmtMoney(effStake)}</span>
             </div>
             <div className="text-[10px] text-slate-300 flex justify-between font-mono">
               <span>{symbol}</span>
@@ -399,62 +447,22 @@ export function Ticket() {
           </div>
         )}
 
-        <div className="grid gap-2.5">
-          {/* UP BUTTON: Green Quotex button with UP and Arrow */}
-          <button
-            onClick={() => submit('UP')}
-            disabled={busy || !!invalid}
-            className={clsx(
-              'w-full h-12 rounded-lg bg-[#00c076] hover:bg-[#00d684] active:scale-[0.98] text-white font-black text-[15px] flex items-center justify-between px-5 transition shadow-lg',
-              flash === 'UP' && 'brightness-125',
-              isArmedUp && 'ring-2 ring-emerald-400 ring-offset-2 ring-offset-base-900 animate-pulse'
-            )}
-          >
-            <span>Up</span>
-            <div className="w-7 h-7 rounded-full bg-black/20 flex items-center justify-center text-sm font-black">
-              ↑
-            </div>
-          </button>
-
-          {/* DOWN BUTTON: Red Quotex button with DOWN and Arrow */}
-          <button
-            onClick={() => submit('DOWN')}
-            disabled={busy || !!invalid}
-            className={clsx(
-              'w-full h-12 rounded-lg bg-[#ff5447] hover:bg-[#ff685c] active:scale-[0.98] text-white font-black text-[15px] flex items-center justify-between px-5 transition shadow-lg',
-              flash === 'DOWN' && 'brightness-125',
-              isArmedDown && 'ring-2 ring-rose-400 ring-offset-2 ring-offset-base-900 animate-pulse'
-            )}
-          >
-            <span>Down</span>
-            <div className="w-7 h-7 rounded-full bg-black/20 flex items-center justify-center text-sm font-black">
-              ↓
-            </div>
-          </button>
+        {dirBtn('UP')}
+        <div className="text-center py-1">
+          <div className="text-[22px] font-extrabold ax-num text-up leading-none">+{payoutPct}%</div>
+          <div className="text-[11px] text-mute mt-1">Your payout: <span className="ax-num font-bold text-ink1">{fmtMoney(payout)}</span></div>
         </div>
+        {dirBtn('DOWN')}
 
-        {invalid && account && stake > available && (
-          <div className="text-[10px] text-[#ff5447] text-center font-medium">
+        {account && effStake > available && (
+          <div className="text-[10px] text-down text-center font-medium">
             Investment exceeds available balance ({fmtMoney(available)}).
-            {account.accountType === 'LIVE' && (
-              <a href="/wallet" className="block text-[#00c076] underline font-bold mt-1">
-                + Deposit funds to trade live
-              </a>
-            )}
+            {account.accountType === 'LIVE' && <a href="/wallet" className="block text-up underline font-bold mt-1">+ Deposit funds to trade live</a>}
           </div>
         )}
-        {invalid && meta && !meta.enabled && (
-          <div className="text-[10px] text-[#ff5447] text-center font-medium">{symbol} is currently halted.</div>
-        )}
-
-        <div className="flex items-center justify-between text-[11px] px-1 text-mute">
-          <span>{account?.accountType === 'LIVE' ? 'Live Balance' : 'Demo Balance'}</span>
-          <span className={clsx('font-mono font-bold', account?.accountType === 'LIVE' ? 'text-[#00c076]' : 'text-accent-300')}>
-            {account ? fmtMoney(account.balance) : '—'}
-          </span>
-        </div>
+        {account && effStake <= available && (effStake < minS || effStake > maxS) && <div className="text-[10px] text-down text-center font-medium">Investment must be between {fmtMoney(minS)} and {fmtMoney(maxS)}.</div>}
+        {halted && <div className="text-[10px] text-down text-center font-medium">{symbol} is currently closed for trading.</div>}
       </div>
     </div>
   );
 }
-

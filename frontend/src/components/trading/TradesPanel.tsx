@@ -287,3 +287,34 @@ export function CompactTradeHistoryList({ accountId }: { accountId?: string | nu
   );
 }
 
+/** Compact settled-trade cards for the terminal's Trades panel ("Closed" tab). */
+export function ClosedTradesList({ accountId }: { accountId?: string | null }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['options', 'history', accountId, 'compact'],
+    queryFn: () => get<{ items: OptionTrade[] }>('/api/v1/options/history', { pageSize: 30, ...(accountId ? { accountId } : {}) }),
+    refetchInterval: 8000,
+  });
+  if (isLoading) return <TableSkeleton rows={3} cols={2} />;
+  if (!data?.items.length) return <Empty title="No closed trades" hint="Settled trades appear here with their result." />;
+  return (
+    <div className="divide-y divide-white/[0.06]">
+      {data.items.map((t) => {
+        const p = t.profit ?? 0;
+        return (
+          <div key={t.id} className="px-3 py-2">
+            <div className="flex items-center gap-1.5">
+              <span className={clsx('w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shrink-0', t.direction === 'UP' ? 'bg-up/15 text-up' : 'bg-down/15 text-down')}>{t.direction === 'UP' ? '↑' : '↓'}</span>
+              <span className="text-xs font-bold">{t.symbol}</span>
+              <span className="text-[10px] text-mute ax-num">{fmtDur(t.durationSec)}</span>
+              <span className={clsx('ml-auto ax-num text-xs font-bold', p > 0 ? 'text-up' : p < 0 ? 'text-down' : 'text-fog')}>{p > 0 ? '+' : ''}{fmtMoney(p)}</span>
+            </div>
+            <div className="flex items-center text-[10px] text-mute ax-num mt-1 pl-[26px]">
+              <span>{fmtPrice(t.entryPrice)} → {t.closePrice != null ? fmtPrice(t.closePrice) : '—'}</span>
+              <span className="ml-auto">{fmtMoney(t.stake)} · {t.settledAt ? fmtTime(t.settledAt) : '—'}</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}

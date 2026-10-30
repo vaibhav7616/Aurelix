@@ -13,6 +13,7 @@ import { HistoryPage } from './pages/app/HistoryPage';
 import { WalletPage, TransfersPage } from './pages/app/WalletPages';
 import { LeaderboardPage } from './pages/app/LeaderboardPage';
 import { NotificationsPage, SettingsPage, MorePage } from './pages/app/MiscApp';
+import { TopPage, SupportPage } from './pages/app/CommunityPages';
 import { AdminOverview, AdminUsers, AdminAccounts, AdminAssets, AdminMarket } from './pages/admin/AdminPages';
 import { AdminOptions, AdminOrders, AdminPositions, AdminTrades, AdminDeposits, AdminWithdrawals, AdminRisk, AdminBroadcast, AdminAudit, AdminSettings } from './pages/admin/AdminOps';
 import { useAuth } from './stores/authStore';
@@ -69,6 +70,8 @@ export const router = createBrowserRouter([
       { path: '/notifications', element: <NotificationsPage /> },
       { path: '/settings', element: <SettingsPage /> },
       { path: '/more', element: <MorePage /> },
+      { path: '/top', element: <TopPage /> },
+      { path: '/support', element: <SupportPage /> },
     ],
   },
   {

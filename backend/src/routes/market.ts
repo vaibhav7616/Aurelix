@@ -86,7 +86,7 @@ r.get('/candles', ah(async (req, res) => {
     candles = orderCandles(rows.reverse().map((c) => ({ symbol: c.symbol, timeframe: c.timeframe, open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), volume: Number(c.volume), openTime: c.openTime.getTime(), closeTime: c.closeTime.getTime() })));
   }
   res.json({ success: true, data: { demo: getProvider().isDemo, candles, serverTime: Date.now() }, error: null });
-});
+}));
 
 // Quotex Algorithmic Trading Signals (RSI, MACD, EMA momentum across timeframes)
 r.get('/signals', ah(async (_req, res) => {

@@ -14,6 +14,12 @@ interface TerminalState {
   /** expiry currently selected in the ticket → chart previews the trade window before you click */
   pendingDurationSec: number;
   setPendingDuration: (sec: number) => void;
+  /** Time mode: the fixed clock expiry selected in the ticket (ms, server clock); null in Timer mode */
+  previewExpiry: number | null;
+  setPreviewExpiry: (ms: number | null) => void;
+  /** Up/Down button under the pointer → chart tints the projected trade window */
+  hoverDir: 'UP' | 'DOWN' | null;
+  setHoverDir: (d: 'UP' | 'DOWN' | null) => void;
   /** feed health: timestamp of the last quote received */
   lastQuoteAt: number;
   chartType: 'candles' | 'line' | 'area';
@@ -49,6 +55,10 @@ export const useTerminal = create<TerminalState>((set) => ({
   candleEvents: {},
   pendingDurationSec: Number(localStorage.getItem('ax_opt_dur') ?? 60) || 60,
   setPendingDuration: (pendingDurationSec) => set({ pendingDurationSec }),
+  previewExpiry: null,
+  setPreviewExpiry: (previewExpiry) => set({ previewExpiry }),
+  hoverDir: null,
+  setHoverDir: (hoverDir) => set({ hoverDir }),
   lastQuoteAt: 0,
   chartType: 'candles',
   accountId: localStorage.getItem('ax_account'),

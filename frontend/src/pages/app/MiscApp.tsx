@@ -69,7 +69,7 @@ export function SettingsPage() {
 
   return (
     <div className="max-w-[640px] mx-auto p-4 space-y-3">
-      <h1 className="text-lg font-bold tracking-tight">Settings</h1>
+      <h1 className="text-lg font-bold tracking-tight">Account</h1>
       <Card>
         <div className="text-[13px] font-bold">Profile</div>
         <div className="text-[11px] text-mute mt-0.5">{profile?.email} · {profile?.role}</div>
@@ -110,8 +110,9 @@ export function MorePage() {
   const nav = useNavigate();
   const isAdmin = user?.role === 'ADMIN' || user?.role === 'SUPER_ADMIN';
   const links: Array<[string, string]> = [
-    ['/dashboard', 'Overview'], ['/history', 'Trade history'], ['/deposits', 'Deposits'],
-    ['/withdrawals', 'Withdrawals'], ['/notifications', 'Alerts'], ['/settings', 'Settings'],
+    ['/dashboard', 'Analytics'], ['/top', 'Top of the day'], ['/markets-app', 'Market'], ['/history', 'Trade history'],
+    ['/wallet', 'Wallet'], ['/deposits', 'Deposits'], ['/withdrawals', 'Withdrawals'], ['/notifications', 'Notifications'],
+    ['/settings', 'Account'], ['/support', 'Support & hotkeys'],
     ...(isAdmin ? [['/admin', 'Control deck'] as [string, string]] : []),
   ];
   return (

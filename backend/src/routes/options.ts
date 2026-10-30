@@ -86,6 +86,47 @@ r.get('/stats', ah(async (req: AuthedRequest, res) => {
   res.json({ success: true, data: { accountId: acct.id, ...(await optionStats(acct.id)) }, error: null });
 }));
 
+// Trader sentiment for a symbol: share of UP vs DOWN trades opened by all traders in the last 30 min
+r.get('/sentiment', ah(async (req, res) => {
+  const symbol = String(req.query.symbol ?? '');
+  const asset = symbol ? await prisma.asset.findUnique({ where: { symbol }, select: { id: true } }) : null;
+  if (!asset) throw Err.notFound('Unknown symbol');
+  const since = new Date(Date.now() - 30 * 60_000);
+  const rows = await prisma.binaryOption.groupBy({ by: ['direction'], where: { assetId: asset.id, openedAt: { gte: since } }, _count: { _all: true } });
+  const up = rows.find((x) => x.direction === 'UP')?._count._all ?? 0;
+  const down = rows.find((x) => x.direction === 'DOWN')?._count._all ?? 0;
+  const total = up + down;
+  res.json({ success: true, data: { symbol, upPct: total ? Math.round((up / total) * 100) : 50, samples: total }, error: null });
+}));
+
+// "Top of the day": traders ranked by net profit on trades settled since local midnight
+r.get('/leaderboard', ah(async (req: AuthedRequest, res) => {
+  const since = new Date(new Date().setHours(0, 0, 0, 0));
+  const rows = await prisma.binaryOption.groupBy({
+    by: ['userId'],
+    where: { settledAt: { gte: since }, status: { in: ['WON', 'LOST', 'TIE'] } },
+    _sum: { profit: true },
+    _count: { _all: true },
+  });
+  const ranked = rows
+    .map((r) => ({ userId: r.userId, profit: Number(r._sum.profit ?? 0), trades: r._count._all }))
+    .sort((a, b) => b.profit - a.profit);
+  const top = ranked.slice(0, 20);
+  const users = await prisma.user.findMany({ where: { id: { in: top.map((t) => t.userId) } }, select: { id: true, firstName: true, lastName: true } });
+  const name = (id: string) => { const u = users.find((x) => x.id === id); return u ? `${u.firstName} ${u.lastName.charAt(0)}.` : 'Trader'; };
+  const myIdx = ranked.findIndex((t) => t.userId === req.userId);
+  res.json({
+    success: true,
+    data: {
+      since: since.toISOString(),
+      items: top.map((t, i) => ({ rank: i + 1, name: name(t.userId), profit: t.profit, trades: t.trades, me: t.userId === req.userId })),
+      me: myIdx >= 0 ? { rank: myIdx + 1, profit: ranked[myIdx].profit, trades: ranked[myIdx].trades } : null,
+      participants: ranked.length,
+    },
+    error: null,
+  });
+}));
+
 r.get('/:id', ah(async (req: AuthedRequest, res) => {
   const o = await prisma.binaryOption.findFirst({ where: { id: req.params.id, userId: req.userId! }, include: { asset: true } });
   if (!o) throw Err.notFound('Trade not found');

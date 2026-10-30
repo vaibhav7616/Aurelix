@@ -371,7 +371,7 @@ export function WalletPage() {
       });
       setShowPhonePeGatewayModal(false);
       setDepStep('FAILED');
-      push('warn', 'Payment cancelled or declined. Your account balance was not modified.');
+      push('info', 'Payment cancelled or declined. Your account balance was not modified.');
       ['deposits-list', 'wallet', 'accounts'].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
     }
   }, [pollStatus?.status, isAwaitingPayment]);
@@ -538,7 +538,7 @@ export function WalletPage() {
         currentBalance: data.currentBalance,
       });
       setDepStep('FAILED');
-      push('warn', 'Payment cancelled or failed. Your account balance was not modified.');
+      push('info', 'Payment cancelled or failed. Your account balance was not modified.');
       ['deposits-list', 'wallet', 'accounts'].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
     },
     onError: (e) => push('err', apiError(e)),
@@ -1650,7 +1650,7 @@ export function WalletPage() {
                       setDepStep('FORM');
                       setActiveDepositOrder(null);
                       setProofRef('');
-                      setSelectedUpiApp(null);
+                      setSelectedUpiApp('phonepe');
                       setConfirmedData(null);
                     }}
                     className="px-4 py-3 rounded-xl bg-base-800 hover:bg-base-700 text-white font-bold text-xs border border-line"
@@ -1703,7 +1703,7 @@ export function WalletPage() {
                       setDepStep('FORM');
                       setActiveDepositOrder(null);
                       setProofRef('');
-                      setSelectedUpiApp(null);
+                      setSelectedUpiApp('phonepe');
                       setFailedData(null);
                     }}
                     className="px-4 py-3 rounded-xl bg-[#00c076] hover:bg-[#00d684] text-base-950 font-black text-xs transition"
