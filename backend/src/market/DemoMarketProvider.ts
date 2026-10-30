@@ -18,6 +18,7 @@
 //   • every quote is rounded to the instrument's pip size (5 decimals for FX,
 //     3 for JPY pairs, 2 for crypto/metals) — exactly like a broker feed, which
 //     also makes ties genuinely possible (Quotex refunds on a tie).
+import { env } from '../config/env';
 import { Candle, MarketDataProvider, Tick, orderCandles } from './MarketDataProvider';
 import { prisma } from '../config/database';
 import { cacheGet, cacheSet } from '../config/redis';
@@ -40,6 +41,8 @@ export interface AssetState {
   live: boolean;
   /** recent (ts, mid) quotes — settlement reads the exact price at expiry from here */
   history: Array<[number, number]>;
+  /** when the price last came from its source (live feed message, or the OTC engine step) */
+  feedAt: number;
 }
 
 export const TIMEFRAMES: Record<string, number> = {
@@ -137,6 +140,7 @@ export class DemoMarketProvider implements MarketDataProvider {
           candles: prev?.candles ?? new Map(),
           live: prev?.live ?? false,
           history: prev?.history ?? [],
+          feedAt: prev?.feedAt ?? Date.now(),
         });
       }
     } catch {
@@ -153,7 +157,7 @@ export class DemoMarketProvider implements MarketDataProvider {
         ];
         for (const [symbol, price, vol] of defaults) {
           const pip = pipFor(symbol, price);
-          this.states.set(symbol, { symbol, price: roundTo(price, pip), raw: price, base: price, open24h: price, volatility: vol, spread: 0.0004, enabled: true, pip, vol: 1, momentum: 0, candles: new Map(), live: false, history: [] });
+          this.states.set(symbol, { symbol, price: roundTo(price, pip), raw: price, base: price, open24h: price, volatility: vol, spread: 0.0004, enabled: true, pip, vol: 1, momentum: 0, candles: new Map(), live: false, history: [], feedAt: Date.now() });
         }
       }
     }
@@ -322,7 +326,7 @@ export class DemoMarketProvider implements MarketDataProvider {
         this.rollCandles(s, now);
         continue;
       }
-      if (!s.live) this.step(s, dt); // live-fed symbols are moved by the feed, never by the walk
+      if (!s.live) { this.step(s, dt); s.feedAt = now; } // live-fed symbols are moved by the feed, never by the walk
       this.rollCandles(s, now);
       this.emit(s, now);
     }
@@ -346,6 +350,8 @@ export class DemoMarketProvider implements MarketDataProvider {
 
   /** Record a quote for settlement lookups (bounded to the last PRICE_HISTORY_MS). */
   protected recordPrice(s: AssetState, ts: number) {
+    // a live symbol whose feed went quiet keeps re-emitting its last price — that is not a quote
+    if (ts - s.feedAt > env.MAX_QUOTE_AGE_MS) return;
     const h = s.history;
     const last = h[h.length - 1];
     if (last && ts <= last[0]) last[1] = s.price;
@@ -374,7 +380,19 @@ export class DemoMarketProvider implements MarketDataProvider {
       const mid = (lo + hi + 1) >> 1;
       if (h[mid][0] <= ts) lo = mid; else hi = mid - 1;
     }
+    // the last quote before `ts` must be recent — a gap in the history (stale feed) is not a price
+    if (ts - h[lo][0] > env.MAX_QUOTE_AGE_MS) return null;
     return h[lo][1];
+  }
+
+  isOtc(symbol: string): boolean {
+    return !this.states.get(symbol)?.live;
+  }
+
+  quoteAgeMs(symbol: string): number | null {
+    const s = this.states.get(symbol);
+    if (!s || !s.enabled) return null;
+    return Date.now() - s.feedAt;
   }
 
   /**

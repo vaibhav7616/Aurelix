@@ -1,27 +1,63 @@
-# Aurelix — production overrides: multi-stage builds, no bind mounts, restart always
+# Aurelix — production overrides: multi-stage builds, no bind mounts, nothing but nginx published.
+#
+#   cp .env.production.example .env.production   # fill in every value
+#   docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Required variables use ${VAR:?…} so compose refuses to start with a missing secret, and the
+# backend itself refuses to boot on development defaults (see backend/src/config/env.ts).
 name: aurelix
 services:
   backend:
     build:
       target: production
     restart: always
-    volumes: []
-    command: sh -c "node scripts/db-migrate.cjs && node dist/index.js"
+    ports: !reset []
+    volumes: !reset []
+    command: sh -c "node scripts/db-migrate.cjs && node dist/bootstrap/seedCli.js && node dist/index.js"
     environment:
       NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-aurelix}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aurelix}?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET (32+ random chars)}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?set JWT_REFRESH_SECRET (32+ random chars, different from JWT_SECRET)}
+      FRONTEND_URL: ${FRONTEND_URL:?set FRONTEND_URL e.g. https://app.example.com}
+      CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS e.g. https://app.example.com}
+      MARKET_PROVIDER: ${MARKET_PROVIDER:-real}
+      PAYMENT_PROVIDER: demo   # only used for demo-account instant deposits; live deposits are admin-verified
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+      # deposit destinations (private — only from .env, never the database); empty = method not offered
+      DEPOSIT_UPI_VPA: ${DEPOSIT_UPI_VPA:-}
+      DEPOSIT_UPI_PAYEE: ${DEPOSIT_UPI_PAYEE:-}
+      DEPOSIT_BANK_NAME: ${DEPOSIT_BANK_NAME:-}
+      DEPOSIT_BANK_BENEFICIARY: ${DEPOSIT_BANK_BENEFICIARY:-}
+      DEPOSIT_BANK_ACCOUNT: ${DEPOSIT_BANK_ACCOUNT:-}
+      DEPOSIT_BANK_IFSC: ${DEPOSIT_BANK_IFSC:-}
+      DEPOSIT_BANK_SWIFT: ${DEPOSIT_BANK_SWIFT:-}
+      DEPOSIT_CRYPTO_USDT_TRC20: ${DEPOSIT_CRYPTO_USDT_TRC20:-}
+      DEPOSIT_CRYPTO_BTC: ${DEPOSIT_CRYPTO_BTC:-}
+      DEPOSIT_CRYPTO_ETH: ${DEPOSIT_CRYPTO_ETH:-}
   frontend:
     build:
       target: production
     restart: always
-    volumes: []
+    ports: !reset []
+    volumes: !reset []
     environment:
       API_HOST: backend
     command: ["node", "preview-server.mjs"]
   postgres:
     restart: always
-    ports: []
+    ports: !reset []
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
   redis:
     restart: always
-    ports: []
+    ports: !reset []
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD}"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
   nginx:
     restart: always

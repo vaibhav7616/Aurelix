@@ -17,6 +17,9 @@ import { emitToUser } from '../websocket/socketServer';
 import { notify } from '../services/notificationService';
 import { audit } from '../services/auditService';
 import { randomUUID } from 'crypto';
+import { env } from '../config/env';
+import { utcDayStart } from '../utils/time';
+import { effectivePayoutPct, getPayoutRules } from './payout';
 
 export const OPTION_DURATIONS_SEC = [5, 10, 15, 30, 60, 120, 180, 300, 600, 900, 1800, 3600] as const;
 export const MIN_DURATION_SEC = 5;
@@ -69,9 +72,31 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/**
+ * Pure exposure rule: the platform pays winners from losers, so its risk on an asset is the
+ * imbalance between open UP and DOWN stake. A trade is refused only if it pushes that
+ * imbalance past the limit — trades that reduce it are always allowed.
+ */
+export function exceedsExposure(upStake: number, downStake: number, direction: Direction, stake: number, limit: number): boolean {
+  const net = upStake - downStake;
+  const next = direction === 'UP' ? net + stake : net - stake;
+  return Math.abs(next) > limit && Math.abs(next) > Math.abs(net);
+}
+
+async function checkAssetExposure(assetId: string, symbol: string, direction: Direction, stake: number, limit: number) {
+  const rows = await prisma.binaryOption.groupBy({
+    by: ['direction'],
+    where: { assetId, status: 'OPEN', account: { accountType: 'LIVE' } },
+    _sum: { stake: true },
+  });
+  const sum = (d: Direction) => Number(rows.find((r) => r.direction === d)?._sum.stake ?? 0);
+  if (exceedsExposure(sum('UP'), sum('DOWN'), direction, stake, limit)) throw Err.exposureLimit(symbol);
+}
+
 function serialize(o: {
   id: string; direction: string; stake: unknown; payoutPct: number; entryPrice: unknown; closePrice: unknown; profit: unknown;
   durationSec: number; openedAt: Date; expiresAt: Date; settledAt: Date | null; status: string; accountId: string;
+  closeQuoteAt?: Date | null; settleSource?: string | null;
   asset?: { symbol: string } | null;
 }) {
   return {
@@ -87,6 +112,8 @@ function serialize(o: {
     openedAt: o.openedAt.toISOString(),
     expiresAt: o.expiresAt.toISOString(),
     settledAt: o.settledAt ? o.settledAt.toISOString() : null,
+    closeQuoteAt: o.closeQuoteAt ? o.closeQuoteAt.toISOString() : null,
+    settleSource: o.settleSource ?? null,
     status: o.status,
     accountId: o.accountId,
   };
@@ -119,12 +146,16 @@ export async function openOption(input: OpenOptionInput) {
   if (!account) throw Err.notFound('Trading account not found');
   if (!asset) throw Err.notFound('Asset not found');
 
-  const tick = await getProvider().getTick(asset.symbol);
+  const provider = getProvider();
+  const tick = await provider.getTick(asset.symbol);
   if (!tick) throw Err.assetDisabled();
+  // never open on a frozen quote: a trader watching the real market would know where it is going
+  const age = provider.quoteAgeMs?.(asset.symbol);
+  if (age == null || age > env.MAX_QUOTE_AGE_MS) throw Err.quoteStale(asset.symbol);
   const entryPrice = tick.mid;
 
   // Risk context — open options count as "open positions" for the rule set.
-  const dayStart = new Date(new Date().setHours(0, 0, 0, 0));
+  const dayStart = utcDayStart();
   const [openCount, todayAgg, totalAgg] = await Promise.all([
     prisma.binaryOption.count({ where: { accountId: account.id, status: 'OPEN' } }),
     prisma.binaryOption.aggregate({ _sum: { profit: true }, where: { accountId: account.id, status: { not: 'OPEN' }, settledAt: { gte: dayStart } } }),
@@ -149,6 +180,9 @@ export async function openOption(input: OpenOptionInput) {
     rules,
   );
   if (stake < Number(asset.minOrder) || stake > Number(asset.maxOrder)) throw Err.invalidAmount();
+  if (account.accountType === 'LIVE' && rules.maxAssetExposure > 0) {
+    await checkAssetExposure(asset.id, asset.symbol, input.direction, stake, rules.maxAssetExposure);
+  }
 
   const id = randomUUID();
   const openedAt = new Date();
@@ -162,6 +196,7 @@ export async function openOption(input: OpenOptionInput) {
     durationSec = input.durationSec!;
     expiresAt = new Date(openedAt.getTime() + durationSec * 1000);
   }
+  const payoutPct = effectivePayoutPct(asset.payoutPct, durationSec, provider.isOtc?.(asset.symbol) ?? false, await getPayoutRules());
 
   const created = await prisma.$transaction(async (tx) => {
     if (pendingId) {
@@ -173,7 +208,9 @@ export async function openOption(input: OpenOptionInput) {
       if (claimed.count !== 1) throw Err.validation('Pending trade is no longer active');
       await tx.account.update({ where: { id: account.id }, data: { lockedBalance: { decrement: stake } } });
     }
-    // Re-read balance inside the txn and debit the stake atomically (guards double-spend on rapid clicks).
+    // Lock the account row, then re-read: a parallel trade or withdrawal waits, so the stake can
+    // never come out of money another request just reserved.
+    await tx.$queryRaw`SELECT id FROM "Account" WHERE id = ${account.id} FOR UPDATE`;
     const fresh = await tx.account.findUnique({ where: { id: account.id } });
     if (!fresh) throw Err.notFound('Trading account not found');
     const available = Number(fresh.balance) - Number(fresh.lockedBalance);
@@ -190,7 +227,7 @@ export async function openOption(input: OpenOptionInput) {
     const opt = await tx.binaryOption.create({
       data: {
         id, userId: input.userId, accountId: fresh.id, assetId: asset.id,
-        direction: input.direction, stake, payoutPct: asset.payoutPct,
+        direction: input.direction, stake, payoutPct,
         entryPrice, durationSec, openedAt, expiresAt,
         status: 'OPEN', idempotencyKey: key || null,
       },
@@ -231,8 +268,12 @@ export function validateFixedExpiry(expiresAtMs: number, nowMs: number): void {
 
 // ─────────────────────────────────────────────────────── settle ──
 
+/** Where a settlement price came from — stored on the trade as proof. */
+export type SettleSource = 'QUOTE' | 'EXCHANGE' | 'REFUND';
+export interface SettleProof { source: SettleSource; quoteAt: Date }
+
 /** Settle one option at `closePrice`. Idempotent: a second call is a no-op. */
-export async function settleOption(optionId: string, closePrice: number, now = new Date()) {
+export async function settleOption(optionId: string, closePrice: number, now = new Date(), proof?: SettleProof) {
   const result = await prisma.$transaction(async (tx) => {
     const o = await tx.binaryOption.findUnique({ where: { id: optionId }, include: { asset: true } });
     if (!o || o.status !== 'OPEN') return null;
@@ -247,7 +288,7 @@ export async function settleOption(optionId: string, closePrice: number, now = n
     // transactions both see status OPEN above).
     const claimed = await tx.binaryOption.updateMany({
       where: { id: o.id, status: 'OPEN' },
-      data: { status: outcome, closePrice, profit, settledAt: now },
+      data: { status: outcome, closePrice, profit, settledAt: now, closeQuoteAt: proof?.quoteAt ?? now, settleSource: proof?.source ?? 'QUOTE' },
     });
     if (claimed.count !== 1) return null;
 
@@ -281,7 +322,39 @@ export async function settleOption(optionId: string, closePrice: number, now = n
   return out;
 }
 
-/** Settle every option whose expiry has passed. Called by the settlement loop and on each tick. */
+/** After an exchange lookup fails on a network error, keep retrying this long before refunding. */
+const EXCHANGE_RETRY_MS = 5 * 60_000;
+
+/**
+ * The price that decides a trade, in order of preference:
+ *   1. QUOTE    — the live quote at the expiry instant (in-memory history)
+ *   2. EXCHANGE — the exchange's recorded trade at that instant (live-fed symbols; covers restarts)
+ *   3. REFUND   — no trustworthy price exists: settle at entry → TIE, stake returned
+ * Returns null when the exchange could not be reached yet — the caller retries on a later pass.
+ */
+export async function resolveClosePrice(
+  symbol: string, expiresAt: Date, entryPrice: number, now: Date, opts: { skipExchange?: boolean } = {},
+): Promise<{ price: number; source: SettleSource } | null> {
+  const provider = getProvider();
+  const ts = expiresAt.getTime();
+  const quote = provider.priceAt?.(symbol, ts) ?? null;
+  if (quote != null) return { price: quote, source: 'QUOTE' };
+  if (provider.historicalPrice) {
+    const recent = now.getTime() - ts < EXCHANGE_RETRY_MS;
+    if (opts.skipExchange && recent) return null;
+    if (!opts.skipExchange) {
+      try {
+        const p = await provider.historicalPrice(symbol, ts);
+        if (p != null) return { price: p, source: 'EXCHANGE' };
+      } catch (err) {
+        if (recent) throw err;
+      }
+    }
+  }
+  return { price: entryPrice, source: 'REFUND' };
+}
+
+/** Settle every option whose expiry has passed. Called by the settlement loop. */
 export async function settleExpired(now = new Date()): Promise<number> {
   const due = await prisma.binaryOption.findMany({
     where: { status: 'OPEN', expiresAt: { lte: now } },
@@ -290,18 +363,19 @@ export async function settleExpired(now = new Date()): Promise<number> {
     take: 200,
   });
   if (!due.length) return 0;
-  const provider = getProvider();
   let n = 0;
+  // one failed exchange call per pass is enough — don't stall every other settlement on timeouts
+  let exchangeDown = false;
   for (const o of due) {
-    // Quotex rule: the result is the quote that was live at the expiry instant, not whatever
-    // the price is when this loop happens to run.
-    let close = provider.priceAt?.(o.asset.symbol, o.expiresAt.getTime()) ?? null;
-    if (close == null) {
-      const t = await provider.getTick(o.asset.symbol).catch(() => null);
-      // Halted asset: settle at entry → TIE, so funds are never stuck.
-      close = t?.mid ?? Number(o.entryPrice);
+    let close: Awaited<ReturnType<typeof resolveClosePrice>>;
+    try {
+      close = await resolveClosePrice(o.asset.symbol, o.expiresAt, Number(o.entryPrice), now, { skipExchange: exchangeDown });
+    } catch {
+      exchangeDown = true;
+      continue; // retried on the next pass
     }
-    const r = await settleOption(o.id, close, now).catch(() => null);
+    if (!close) continue;
+    const r = await settleOption(o.id, close.price, now, { source: close.source, quoteAt: o.expiresAt }).catch(() => null);
     if (r) n++;
   }
   return n;
@@ -340,7 +414,7 @@ export async function listOptions(params: { userId: string; accountId?: string; 
 }
 
 export async function optionStats(accountId: string) {
-  const dayStart = new Date(new Date().setHours(0, 0, 0, 0));
+  const dayStart = utcDayStart();
   const [open, settled] = await Promise.all([
     prisma.binaryOption.findMany({ where: { accountId, status: 'OPEN' }, select: { stake: true } }),
     prisma.binaryOption.findMany({ where: { accountId, status: { not: 'OPEN' } }, select: { profit: true, status: true, settledAt: true, stake: true } }),

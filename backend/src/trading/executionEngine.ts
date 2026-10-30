@@ -9,6 +9,7 @@ import { emitToUser } from '../websocket/socketServer';
 import { notify } from '../services/notificationService';
 import { audit } from '../services/auditService';
 import { randomUUID } from 'crypto';
+import { utcDayStart } from '../utils/time';
 
 export interface ExecuteOrderInput {
   userId: string;
@@ -55,7 +56,7 @@ export async function executeOrder(input: ExecuteOrderInput) {
   // Gather risk context
   const [openCount, todayTrades, totalTrades] = await Promise.all([
     prisma.position.count({ where: { accountId: account.id, status: 'OPEN' } }),
-    prisma.trade.findMany({ where: { accountId: account.id, closedAt: { gte: new Date(new Date().setHours(0, 0, 0, 0)) } }, select: { realizedPnl: true } }),
+    prisma.trade.findMany({ where: { accountId: account.id, closedAt: { gte: utcDayStart() } }, select: { realizedPnl: true } }),
     prisma.trade.findMany({ where: { accountId: account.id }, select: { realizedPnl: true } }),
   ]);
   const sum = (rows: Array<{ realizedPnl: Decimal }>) => rows.reduce((a, r) => a + Number(r.realizedPnl), 0);

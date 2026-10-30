@@ -37,6 +37,8 @@ r.post('/deposit', validateBody(depositSchema), ah(async (req: AuthedRequest, re
   const { accountId, amount, currency } = req.body as { accountId: string; amount: number; currency: string };
   const acct = await prisma.account.findFirst({ where: { id: accountId, userId: req.userId! } });
   if (!acct) { res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'Account not found' } }); return; }
+  // simulated money: never on a live account (live deposits go through /payments and admin verification)
+  if (acct.accountType !== 'DEMO') { res.status(422).json({ success: false, data: null, error: { code: 'DEMO_ONLY', message: 'Instant deposits are only for demo accounts' } }); return; }
   const provider = getPaymentProvider();
   const pay = await provider.createPayment({ userId: req.userId!, accountId, amount, currency });
   const out = await prisma.$transaction(async (tx) => {

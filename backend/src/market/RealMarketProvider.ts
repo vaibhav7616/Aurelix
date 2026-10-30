@@ -18,6 +18,7 @@ import WebSocket from 'ws';
 import { AssetState, DemoMarketProvider, TIMEFRAMES, roundTo } from './DemoMarketProvider';
 import { Candle, orderCandles } from './MarketDataProvider';
 import { logger } from '../utils/logger';
+import { env } from '../config/env';
 
 /** Platform symbol → Binance spot pair (USDT-quoted; PAXG = 1 troy oz of gold). */
 const BINANCE_PAIRS: Record<string, string> = {
@@ -206,12 +207,29 @@ export class RealMarketProvider extends DemoMarketProvider {
     return out;
   }
 
+  /**
+   * Last exchange trade at or before `ts` (Binance aggTrades — the same source as the live
+   * stream). Only for symbols on the live feed; OTC symbols have no outside record.
+   */
+  async historicalPrice(symbol: string, ts: number): Promise<number | null> {
+    const s = this.states.get(symbol);
+    const pair = this.pairOf(symbol);
+    if (!s || !s.live || !pair) return null;
+    const trades = await getJson<Array<{ p: string; T: number }>>(
+      `${BINANCE_REST}/api/v3/aggTrades?symbol=${pair}&startTime=${ts - env.MAX_QUOTE_AGE_MS}&endTime=${ts}&limit=1000`, 4000,
+    );
+    const last = trades[trades.length - 1];
+    const price = last ? parseFloat(last.p) : NaN;
+    return Number.isFinite(price) && price > 0 ? roundTo(price, s.pip) : null;
+  }
+
   // ───────────────────────────────────────────── live feed ──
 
   private applyPrice(s: AssetState, price: number) {
     if (!Number.isFinite(price) || price <= 0) return;
     s.raw = price;
     s.price = roundTo(price, s.pip);
+    s.feedAt = Date.now();
     if (!s.live) {
       s.live = true;
       logger.info({ symbol: s.symbol }, '[RealMarketProvider] live feed active');

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { randomUUID } from 'node:crypto';
 
 // Idempotency contract: same key → same order, no duplicates.
 // Pure key-normalization check (DB-level test runs in docker integration).
@@ -10,7 +11,7 @@ describe('Idempotency', () => {
     expect(normalize(undefined)).toBeUndefined();
   });
   it('generates unique order ids', () => {
-    const ids = new Set(Array.from({ length: 1000 }, () => crypto.randomUUID()));
+    const ids = new Set(Array.from({ length: 1000 }, () => randomUUID()));
     expect(ids.size).toBe(1000);
   });
 });

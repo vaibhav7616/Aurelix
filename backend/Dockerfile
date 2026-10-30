@@ -35,7 +35,8 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/scripts ./scripts
 COPY package.json ./
-RUN npx prisma generate 2>/dev/null || true
+RUN npx prisma generate
 EXPOSE 4000
 HEALTHCHECK --interval=15s --timeout=5s --retries=5 CMD node -e "fetch('http://localhost:4000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
-CMD ["sh","-c","node scripts/db-migrate.cjs && node dist/index.js"]
+# migrate → base data (assets, risk rules, admin from env; idempotent) → serve
+CMD ["sh","-c","node scripts/db-migrate.cjs && node dist/bootstrap/seedCli.js && node dist/index.js"]

@@ -15,8 +15,27 @@ export interface OptionTrade {
   openedAt: string;
   expiresAt: string;
   settledAt: string | null;
+  /** settlement proof: when the deciding quote was live, and where it came from */
+  closeQuoteAt?: string | null;
+  settleSource?: SettleSource | null;
   status: OptionStatus;
   accountId: string;
+}
+
+/** QUOTE = live quote at expiry · EXCHANGE = exchange trade record · REFUND = no price, stake returned */
+export type SettleSource = 'QUOTE' | 'EXCHANGE' | 'REFUND';
+
+/** Payout adjustments set by the platform (mirror of backend trading/payout.ts). */
+export interface PayoutRules {
+  duration: Array<{ maxSec: number; adj: number }>;
+  otcAdj: number;
+}
+
+/** Base payout + duration tier + OTC adjustment, clamped to 1–100 % — same math the server locks in. */
+export function effectivePayoutPct(basePct: number, durationSec: number, otc: boolean, rules?: PayoutRules | null): number {
+  const tier = rules?.duration.find((t) => durationSec <= t.maxSec);
+  const pct = basePct + (tier?.adj ?? 0) + (otc ? rules?.otcAdj ?? 0 : 0);
+  return Math.min(100, Math.max(1, Math.round(pct)));
 }
 
 /** Pending trade (execution by price): opens a regular trade when the quote reaches targetPrice. */
@@ -57,7 +76,8 @@ export interface OptionsConfig {
   /** Time mode: purchases for a clock expiry close this many seconds before it */
   fixedTimeMinLeadSec?: number;
   pendingValidityMs?: number;
-  assets: Array<{ symbol: string; payoutPct: number; minStake: number; maxStake: number; enabled: boolean }>;
+  payoutRules?: PayoutRules;
+  assets: Array<{ symbol: string; payoutPct: number; minStake: number; maxStake: number; enabled: boolean; otc?: boolean }>;
 }
 
 export const DURATION_PRESETS = [5, 10, 15, 30, 60, 120, 180, 300, 600, 900, 1800, 3600];

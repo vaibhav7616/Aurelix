@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Response } from 'express';
 import { prisma } from '../config/database';
 import { ah } from '../utils/asyncHandler';
 import { requireAuth, AuthedRequest } from '../middleware/auth';
@@ -6,6 +6,8 @@ import { notify } from '../services/notificationService';
 import { audit } from '../services/auditService';
 import { emitToUser } from '../websocket/socketServer';
 import { getLiveUsdInrRate, getCurrentUsdInrRate } from '../services/exchangeRateService';
+import { depositSettings, availableMethods, normalizeMethod, type DepositMethod } from '../payments/depositMethods';
+import { getProvider } from '../services/marketService';
 
 const r = Router();
 
@@ -20,10 +22,9 @@ export interface PromoRule {
 export const PROMO_RULES: Record<string, PromoRule> = {
   WELCOME50: { code: 'WELCOME50', bonusPct: 50, minAmount: 15, description: '+50% Welcome Bonus on Trading Capital', badge: '50% BONUS' },
   BONUS30: { code: 'BONUS30', bonusPct: 30, minAmount: 10, description: '+30% Deposit Booster', badge: '30% BONUS' },
-  QUOTEX30: { code: 'QUOTEX30', bonusPct: 30, minAmount: 10, description: '+30% Quotex Official Promo Bonus', badge: '30% BONUS' },
   START30: { code: 'START30', bonusPct: 30, minAmount: 10, description: '+30% Starter Pack Bonus', badge: '30% BONUS' },
   VIP100: { code: 'VIP100', bonusPct: 100, minAmount: 100, description: '+100% VIP Capital Match', badge: '100% MATCH' },
-  RISKFREE: { code: 'RISKFREE', bonusPct: 20, minAmount: 25, description: '+20% Bonus + 3 Risk-Free Trades Protection', badge: 'RISK-FREE' },
+  RISKFREE: { code: 'RISKFREE', bonusPct: 20, minAmount: 25, description: '+20% Deposit Bonus', badge: '20% BONUS' },
 };
 
 // Live exchange rate endpoint (accessible for cashier previews and conversion calculators)
@@ -79,6 +80,11 @@ r.post('/validate-promo', ah(async (req, res) => {
 
 r.use(requireAuth);
 
+// Deposit methods that are configured and can be used right now
+r.get('/methods', ah(async (_req, res) => {
+  res.json({ success: true, data: { methods: availableMethods(depositSettings()) }, error: null });
+}));
+
 // 1. List user's deposits
 r.get('/', ah(async (req: AuthedRequest, res) => {
   const deps = await prisma.deposit.findMany({
@@ -109,13 +115,23 @@ r.post('/create', ah(async (req: AuthedRequest, res) => {
     res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'Account not found' } });
     return;
   }
+  if (acct.accountType !== 'LIVE') {
+    res.status(422).json({ success: false, data: null, error: { code: 'LIVE_ONLY', message: 'Deposits go to your live account — demo accounts are refilled for free' } });
+    return;
+  }
+  const settings = depositSettings();
+  const chosen = normalizeMethod(String(method ?? ''));
+  if (!availableMethods(settings).includes(chosen as DepositMethod)) {
+    res.status(400).json({ success: false, data: null, error: { code: 'METHOD_UNAVAILABLE', message: 'This deposit method is not available right now' } });
+    return;
+  }
 
   // Bonus calculation (using PROMO_RULES or tier bonus)
   let bonusPct = 0;
   const cleanCode = promoCode ? promoCode.trim().toUpperCase() : '';
   if (cleanCode && PROMO_RULES[cleanCode]) {
     bonusPct = PROMO_RULES[cleanCode].bonusPct;
-  } else if (cleanCode && ['QUOTEX30', 'BONUS30', 'START30', 'AURELIX'].includes(cleanCode)) {
+  } else if (cleanCode && ['BONUS30', 'START30', 'AURELIX'].includes(cleanCode)) {
     bonusPct = 30;
   } else if (parsedAmount >= 100) {
     bonusPct = 20;
@@ -126,67 +142,47 @@ r.post('/create', ah(async (req: AuthedRequest, res) => {
   // Generate unique order reference
   const orderRef = `DEP-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-  // Tailored gateway instructions for each payment method (Quotex parity)
-  let gatewayData: Record<string, unknown> = {};
-  if (method === 'crypto_usdt_trc20') {
+  // Payment instructions — destination details come from System settings (see payments/depositMethods.ts)
+  let gatewayData: Record<string, unknown>;
+  if (chosen.startsWith('crypto_')) {
+    const coin = chosen === 'crypto_btc' ? { title: 'Bitcoin (BTC)', network: 'Bitcoin', cur: 'BTC', sym: 'BTC/USD', dp: 8 }
+      : chosen === 'crypto_eth' ? { title: 'Ethereum (ETH)', network: 'Ethereum (ERC20)', cur: 'ETH', sym: 'ETH/USD', dp: 6 }
+      : { title: 'USDT (Tether) TRC-20', network: 'TRON (TRC20)', cur: 'USDT', sym: null, dp: 2 };
+    // USDT is pegged 1:1; BTC/ETH are converted at the live market price
+    const px = coin.sym ? (await getProvider().getTick(coin.sym).catch(() => null))?.mid : 1;
+    if (!px) {
+      res.status(503).json({ success: false, data: null, error: { code: 'RATE_UNAVAILABLE', message: `${coin.cur} price is unavailable right now — try again shortly` } });
+      return;
+    }
     gatewayData = {
       type: 'crypto',
-      title: 'USDT (Tether) TRC-20',
-      network: 'TRON (TRC20)',
-      address: 'TGkM77h9sKxR3c4kZf5uQ8pA9dYx1tV8wZ',
-      amountCrypto: parsedAmount.toFixed(2),
-      cryptoCurrency: 'USDT',
-      rate: '1 USDT = $1.00 USD',
-      memo: orderRef,
-      expiryMinutes: 15,
-      warning: 'Send only USDT to this address using the TRC20 network. Sending any other coin will result in loss of funds.',
-    };
-  } else if (method === 'crypto_btc') {
-    const btcAmount = (parsedAmount / 65000).toFixed(6);
-    gatewayData = {
-      type: 'crypto',
-      title: 'Bitcoin (BTC)',
-      network: 'Bitcoin Native',
-      address: 'bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq',
-      amountCrypto: btcAmount,
-      cryptoCurrency: 'BTC',
-      rate: '1 BTC ≈ $65,000 USD',
+      title: coin.title,
+      network: coin.network,
+      address: settings[`deposit.${chosen.replace('_', '.')}`],
+      amountCrypto: (parsedAmount / px).toFixed(coin.dp),
+      cryptoCurrency: coin.cur,
+      rate: `1 ${coin.cur} = $${px.toLocaleString('en-US', { maximumFractionDigits: 2 })} USD`,
       memo: orderRef,
       expiryMinutes: 30,
-      warning: 'Send only BTC to this Bitcoin address. Minimum 1 network confirmation required.',
+      warning: `Send only ${coin.cur} on the ${coin.network} network to this address. Sending another coin or network will lose the funds. After sending, submit the transaction hash — your balance is credited once the payment is confirmed.`,
     };
-  } else if (method === 'crypto_eth') {
-    const ethAmount = (parsedAmount / 3500).toFixed(5);
-    gatewayData = {
-      type: 'crypto',
-      title: 'Ethereum (ETH)',
-      network: 'Ethereum (ERC20)',
-      address: '0x71C8366420A023c0349272367709320e4b856376',
-      amountCrypto: ethAmount,
-      cryptoCurrency: 'ETH',
-      rate: '1 ETH ≈ $3,500 USD',
-      memo: orderRef,
-      expiryMinutes: 30,
-      warning: 'Send only ETH (ERC20) to this address.',
-    };
-  } else if (method === 'upi_qr' || method === 'upi' || method.startsWith('upi_')) {
+  } else if (chosen === 'upi_qr') {
     const liveRateInfo = await getLiveUsdInrRate();
     const inrRate = liveRateInfo.rate;
     const inrAmt = Math.round(parsedAmount * inrRate);
-    const upiId = 'aurelix.finance@icici';
-    const payeeName = 'Aurelix Trading Global';
+    const upiId = settings['deposit.upi.vpa'];
+    const payeeName = settings['deposit.upi.payee'];
     const encodedUpi = encodeURIComponent(upiId);
     const encodedName = encodeURIComponent(payeeName);
     const encodedRef = encodeURIComponent(orderRef);
     const basePayload = `upi://pay?pa=${encodedUpi}&pn=${encodedName}&am=${inrAmt}&cu=INR&tn=${encodedRef}&tr=${encodedRef}`;
-
     gatewayData = {
       type: 'upi',
-      title: 'UPI Instant Payment (PhonePe, GPay, Paytm, BHIM)',
+      title: 'UPI (PhonePe, Google Pay, Paytm, BHIM)',
       upiId,
       payeeName,
       amountInr: inrAmt,
-      rate: `1 USD = ₹${inrRate.toFixed(2)} (Live Market)`,
+      rate: `1 USD = ₹${inrRate.toFixed(2)}`,
       exchangeRate: inrRate,
       exchangeRateDate: liveRateInfo.date,
       exchangeRateSource: liveRateInfo.source,
@@ -200,27 +196,19 @@ r.post('/create', ah(async (req: AuthedRequest, res) => {
         bhim: basePayload,
         generic: basePayload,
       },
-      warning: 'Select PhonePe, Google Pay, or Paytm to open directly on your mobile device, or scan the QR code. Once payment is completed, verify to update your balance.',
-    };
-  } else if (method === 'bank_transfer') {
-    gatewayData = {
-      type: 'bank',
-      title: 'Direct Bank Wire / IMPS',
-      bankName: 'Global Commercial Bank Ltd',
-      beneficiaryName: 'Aurelix Trading Global Ltd',
-      accountNumber: '918237465019',
-      ifsc: 'GCBL0004521',
-      swift: 'GCBLUS33XXX',
-      reference: orderRef,
-      instructions: 'Include the reference code in your transfer remark so our automated gateway matches your wire immediately.',
+      warning: `Pay exactly ₹${inrAmt.toLocaleString('en-IN')} by scanning the QR or opening your UPI app, then enter the 12-digit UTR from the app. Your balance is credited once the payment is confirmed.`,
     };
   } else {
     gatewayData = {
-      type: 'card',
-      title: 'Credit / Debit Card (Visa & Mastercard)',
-      supported: ['Visa', 'Mastercard', 'Maestro'],
-      currency: 'USD',
+      type: 'bank',
+      title: 'Bank transfer (IMPS / NEFT / RTGS)',
+      bankName: settings['deposit.bank.name'],
+      beneficiaryName: settings['deposit.bank.beneficiary'],
+      accountNumber: settings['deposit.bank.account'],
+      ifsc: settings['deposit.bank.ifsc'],
+      ...(settings['deposit.bank.swift'] ? { swift: settings['deposit.bank.swift'] } : {}),
       reference: orderRef,
+      instructions: 'Put the reference code in the transfer remarks, then submit the bank reference (UTR). Your balance is credited once the payment is confirmed.',
     };
   }
 
@@ -231,7 +219,7 @@ r.post('/create', ah(async (req: AuthedRequest, res) => {
       accountId: acct.id,
       amount: parsedAmount,
       currency: 'USD',
-      provider: method,
+      provider: chosen,
       providerRef: orderRef,
       status: 'PENDING',
     },
@@ -242,7 +230,7 @@ r.post('/create', ah(async (req: AuthedRequest, res) => {
     action: 'DEPOSIT_INITIATED',
     entityType: 'Deposit',
     entityId: dep.id,
-    metadata: { amount: parsedAmount, method, orderRef },
+    metadata: { amount: parsedAmount, method: chosen, orderRef },
   });
 
   res.status(201).json({
@@ -254,7 +242,7 @@ r.post('/create', ah(async (req: AuthedRequest, res) => {
       bonusPct,
       bonusAmount,
       totalCredit,
-      method,
+      method: chosen,
       gatewayData,
       status: 'PENDING',
       createdAt: dep.createdAt,
@@ -263,126 +251,50 @@ r.post('/create', ah(async (req: AuthedRequest, res) => {
   });
 }));
 
-// 3. Step 2 submission: user submits UTR / TxID / Reference proof
+// 3. User submits the payment reference (UTR / tx hash / bank reference).
+// This NEVER credits the balance: the deposit stays PENDING until an admin has checked the
+// money actually arrived (admin → Deposits → approve). Shared by submit-proof, verify-utr, verify-upi.
+async function recordProof(req: AuthedRequest, res: Response, reference: string, kind: string) {
+  const dep = await prisma.deposit.findFirst({ where: { id: req.params.id, userId: req.userId! } });
+  if (!dep) { res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'Deposit not found' } }); return; }
+  if (dep.status !== 'PENDING') { res.status(400).json({ success: false, data: null, error: { code: 'INVALID_STATUS', message: `Deposit is ${dep.status.toLowerCase()}` } }); return; }
+  if (dep.proofRef) { res.status(409).json({ success: false, data: null, error: { code: 'PROOF_EXISTS', message: 'A payment reference was already submitted for this deposit' } }); return; }
+  try {
+    // conditional: only a PENDING deposit without proof can take this reference
+    const n = await prisma.deposit.updateMany({ where: { id: dep.id, status: 'PENDING', proofRef: null }, data: { proofRef: reference } });
+    if (!n.count) { res.status(409).json({ success: false, data: null, error: { code: 'INVALID_STATUS', message: 'Deposit changed — refresh and try again' } }); return; }
+  } catch (e) {
+    if ((e as { code?: string }).code === 'P2002') {
+      res.status(409).json({ success: false, data: null, error: { code: 'DUPLICATE_REFERENCE', message: 'This payment reference was already used for another deposit' } });
+      return;
+    }
+    throw e;
+  }
+  await notify({ userId: req.userId!, type: 'DEPOSIT', title: 'Payment reference received', message: `$${Number(dep.amount).toFixed(2)} deposit — we are verifying your payment. Your balance is credited once it is confirmed.` });
+  await audit({ actorId: req.userId, action: 'DEPOSIT_PROOF_SUBMITTED', entityType: 'Deposit', entityId: dep.id, metadata: { reference, kind } });
+  res.json({ success: true, data: { depositId: dep.id, status: 'PENDING_VERIFICATION', utr: reference, reference }, error: null });
+}
+
 r.post('/:id/submit-proof', ah(async (req: AuthedRequest, res) => {
-  const { reference, notes } = req.body as { reference: string; notes?: string };
-  const dep = await prisma.deposit.findFirst({
-    where: { id: req.params.id, userId: req.userId! },
-  });
-
-  if (!dep) {
-    res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'Deposit not found' } });
+  const ref = String((req.body as { reference?: string }).reference ?? '').trim();
+  if (ref.length < 6 || ref.length > 128) {
+    res.status(400).json({ success: false, data: null, error: { code: 'REQUIRED_REF', message: 'Enter the transaction hash, UTR or bank reference of your payment' } });
     return;
   }
-  if (dep.status !== 'PENDING') {
-    res.status(400).json({ success: false, data: null, error: { code: 'INVALID_STATUS', message: 'Deposit is not pending' } });
-    return;
-  }
-
-  const ref = (reference || '').trim();
-  if (!ref) {
-    res.status(400).json({ success: false, data: null, error: { code: 'REQUIRED_REF', message: 'Please provide the transaction hash, UTR, or payment reference' } });
-    return;
-  }
-
-  const updated = await prisma.deposit.update({
-    where: { id: dep.id },
-    data: {
-      providerRef: `${dep.providerRef} | Proof: ${ref}${notes ? ` (${notes})` : ''}`,
-    },
-  });
-
-  await notify({
-    userId: req.userId!,
-    type: 'DEPOSIT',
-    title: 'Payment Reference Received',
-    message: `Payment proof for $${Number(dep.amount).toFixed(2)} submitted. Verifying on network…`,
-  });
-
-  await audit({
-    actorId: req.userId,
-    action: 'DEPOSIT_PROOF_SUBMITTED',
-    entityType: 'Deposit',
-    entityId: dep.id,
-    metadata: { reference: ref },
-  });
-
-  res.json({
-    success: true,
-    data: {
-      depositId: updated.id,
-      status: 'PENDING_VERIFICATION',
-      message: 'Proof submitted. Gateway is confirming your payment.',
-    },
-    error: null,
-  });
+  await recordProof(req, res, ref, 'reference');
 }));
 
-// 4. Instant Confirmation (Sandbox / Sandbox Test / Admin auto-settlement)
-r.post('/:id/confirm', ah(async (req: AuthedRequest, res) => {
-  const dep = await prisma.deposit.findFirst({
-    where: { id: req.params.id, userId: req.userId! },
-  });
-
-  if (!dep) {
-    res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'Deposit not found' } });
+// UPI: the 12-digit UTR from the user's banking app
+const verifyUtr = ah(async (req: AuthedRequest, res) => {
+  const utr = String((req.body as { utr?: string }).utr ?? '').replace(/\s+/g, '');
+  if (!/^\d{12}$/.test(utr)) {
+    res.status(400).json({ success: false, data: null, error: { code: 'INVALID_UTR', message: 'Enter the 12-digit UTR / reference number from your UPI app' } });
     return;
   }
-  if (dep.status === 'COMPLETED') {
-    res.json({ success: true, data: { alreadyCompleted: true }, error: null });
-    return;
-  }
-
-  const amount = Number(dep.amount);
-
-  const out = await prisma.$transaction(async (tx) => {
-    const acct = await tx.account.findUnique({ where: { id: dep.accountId } });
-    if (!acct) throw new Error('Account missing');
-    const newBal = Number(acct.balance) + amount;
-    await tx.account.update({ where: { id: acct.id }, data: { balance: newBal } });
-    await tx.walletTransaction.create({
-      data: {
-        accountId: acct.id,
-        type: 'DEPOSIT',
-        amount,
-        balanceAfter: newBal,
-        reference: dep.providerRef,
-        memo: `Real deposit confirmed (${dep.provider})`,
-      },
-    });
-    const completed = await tx.deposit.update({
-      where: { id: dep.id },
-      data: { status: 'COMPLETED' },
-    });
-    return { newBal, completed };
-  });
-
-  emitToUser(req.userId!, 'balance:updated', { accountId: dep.accountId, balance: out.newBal });
-  await notify({
-    userId: req.userId!,
-    type: 'DEPOSIT',
-    title: 'Deposit Confirmed!',
-    message: `+$${amount.toFixed(2)} USD has been credited to your trading account.`,
-  });
-  await audit({
-    actorId: req.userId,
-    action: 'DEPOSIT_CONFIRMED',
-    entityType: 'Deposit',
-    entityId: dep.id,
-    metadata: { amount, balance: out.newBal },
-  });
-
-  res.json({
-    success: true,
-    data: {
-      depositId: dep.id,
-      status: 'COMPLETED',
-      balance: out.newBal,
-      amount,
-    },
-    error: null,
-  });
-}));
+  await recordProof(req, res, utr, 'utr');
+});
+r.post('/:id/verify-utr', verifyUtr);
+r.post('/:id/verify-upi', verifyUtr);
 
 // 5. Cancel pending deposit
 r.post('/:id/cancel', ah(async (req: AuthedRequest, res) => {
@@ -391,6 +303,10 @@ r.post('/:id/cancel', ah(async (req: AuthedRequest, res) => {
   });
   if (!dep) {
     res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'Deposit not found' } });
+    return;
+  }
+  if (dep.proofRef) {
+    res.status(400).json({ success: false, data: null, error: { code: 'UNDER_REVIEW', message: 'Payment reference already submitted — this deposit is being verified' } });
     return;
   }
   if (dep.status === 'COMPLETED') {
@@ -406,377 +322,6 @@ r.post('/:id/cancel', ah(async (req: AuthedRequest, res) => {
   res.json({ success: true, data: updated, error: null });
 }));
 
-// 6. UPI Real-time Intent & UTR Verification (Confirms & Updates Balance)
-r.post('/:id/verify-upi', ah(async (req: AuthedRequest, res) => {
-  const { utr, app } = req.body as { utr?: string; app?: string };
-  const dep = await prisma.deposit.findFirst({
-    where: { id: req.params.id, userId: req.userId! },
-  });
-
-  if (!dep) {
-    res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'Deposit invoice not found' } });
-    return;
-  }
-
-  if (dep.status === 'COMPLETED') {
-    const acct = await prisma.account.findUnique({ where: { id: dep.accountId } });
-    res.json({
-      success: true,
-      data: {
-        depositId: dep.id,
-        status: 'COMPLETED',
-        alreadyCompleted: true,
-        balance: acct ? Number(acct.balance) : 0,
-        amount: Number(dep.amount),
-        utr: dep.providerRef,
-        app: app || 'UPI',
-      },
-      error: null,
-    });
-    return;
-  }
-
-  if (dep.status === 'FAILED' || dep.status === 'CANCELLED') {
-    res.status(400).json({
-      success: false,
-      data: null,
-      error: { code: 'INVALID_STATUS', message: `Deposit cannot be confirmed because it is ${dep.status}` },
-    });
-    return;
-  }
-
-  const trimmedUtr = (utr || '').trim();
-  const finalUtr = trimmedUtr || `UPI${Date.now().toString().slice(-8)}${Math.floor(1000 + Math.random() * 9000)}`;
-  const appLabel = app ? app.toUpperCase() : 'UPI APP';
-  const amount = Number(dep.amount);
-
-  // Atomically credit live account balance and update transaction
-  const out = await prisma.$transaction(async (tx) => {
-    const acct = await tx.account.findUnique({ where: { id: dep.accountId } });
-    if (!acct) throw new Error('Account missing');
-    const newBal = Number(acct.balance) + amount;
-
-    await tx.account.update({ where: { id: acct.id }, data: { balance: newBal } });
-
-    await tx.walletTransaction.create({
-      data: {
-        accountId: acct.id,
-        type: 'DEPOSIT',
-        amount,
-        balanceAfter: newBal,
-        reference: finalUtr,
-        memo: `UPI Payment verified via ${appLabel} (UTR: ${finalUtr})`,
-      },
-    });
-
-    const completed = await tx.deposit.update({
-      where: { id: dep.id },
-      data: {
-        status: 'COMPLETED',
-        providerRef: `${dep.providerRef || dep.id} | UTR: ${finalUtr} (${appLabel})`,
-      },
-    });
-
-    return { newBal, completed };
-  });
-
-  emitToUser(req.userId!, 'balance:updated', { accountId: dep.accountId, balance: out.newBal });
-
-  const currentRate = getCurrentUsdInrRate();
-  const calculatedInr = Math.round(amount * currentRate);
-
-  await notify({
-    userId: req.userId!,
-    type: 'DEPOSIT',
-    title: 'UPI Payment Confirmed! ⚡',
-    message: `₹${calculatedInr.toLocaleString('en-IN')} ($${amount.toFixed(2)} USD) received via ${appLabel}. Balance updated!`,
-  });
-
-  await audit({
-    actorId: req.userId,
-    action: 'UPI_DEPOSIT_CONFIRMED',
-    entityType: 'Deposit',
-    entityId: dep.id,
-    metadata: { utr: finalUtr, app: appLabel, amount, inrAmount: calculatedInr, exchangeRate: currentRate, newBalance: out.newBal },
-  });
-
-  res.json({
-    success: true,
-    data: {
-      depositId: dep.id,
-      status: 'COMPLETED',
-      balance: out.newBal,
-      amount,
-      inrAmount: calculatedInr,
-      rate: `1 USD = ₹${currentRate.toFixed(2)}`,
-      utr: finalUtr,
-      app: appLabel,
-    },
-    error: null,
-  });
-}));
-
-// 6a. Send PhonePe Collect Request to User's PhonePe Mobile Number / VPA
-r.post('/:id/phonepe-collect', ah(async (req: AuthedRequest, res) => {
-  const { phone, vpa } = req.body as { phone?: string; vpa?: string };
-  const dep = await prisma.deposit.findFirst({
-    where: { id: req.params.id, userId: req.userId! },
-  });
-  if (!dep) {
-    res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'Deposit invoice not found' } });
-    return;
-  }
-  if (dep.status === 'COMPLETED') {
-    res.status(400).json({ success: false, data: null, error: { code: 'ALREADY_COMPLETED', message: 'Deposit is already completed' } });
-    return;
-  }
-
-  const targetIdentifier = (phone || vpa || '').trim();
-  if (!targetIdentifier || targetIdentifier.length < 5) {
-    res.status(400).json({ success: false, data: null, error: { code: 'INVALID_INPUT', message: 'Please enter a valid PhonePe mobile number or UPI VPA' } });
-    return;
-  }
-
-  const currentRate = getCurrentUsdInrRate();
-  const calculatedInr = Math.round(Number(dep.amount) * currentRate);
-
-  await audit({
-    actorId: req.userId,
-    action: 'PHONEPE_COLLECT_SENT',
-    entityType: 'Deposit',
-    entityId: dep.id,
-    metadata: { identifier: targetIdentifier, inrAmount: calculatedInr },
-  });
-
-  res.json({
-    success: true,
-    data: {
-      depositId: dep.id,
-      status: dep.status,
-      inrAmount: calculatedInr,
-      targetIdentifier,
-      message: `Payment request of ₹${calculatedInr.toLocaleString('en-IN')} sent to PhonePe (${targetIdentifier}). Please approve in your PhonePe mobile app.`,
-    },
-    error: null,
-  });
-}));
-
-// 6b. Official PhonePe Gateway PIN Authorization (Verifies UPI PIN and Atomically Credits Balance)
-r.post('/:id/phonepe-authorize', ah(async (req: AuthedRequest, res) => {
-  const { pin, app } = req.body as { pin?: string; app?: string };
-  const dep = await prisma.deposit.findFirst({
-    where: { id: req.params.id, userId: req.userId! },
-  });
-  if (!dep) {
-    res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'Deposit invoice not found' } });
-    return;
-  }
-  if (dep.status === 'COMPLETED') {
-    const acct = await prisma.account.findUnique({ where: { id: dep.accountId } });
-    res.json({
-      success: true,
-      data: {
-        depositId: dep.id,
-        status: 'COMPLETED',
-        alreadyCompleted: true,
-        balance: acct ? Number(acct.balance) : 0,
-        amount: Number(dep.amount),
-      },
-      error: null,
-    });
-    return;
-  }
-  if (dep.status === 'FAILED' || dep.status === 'CANCELLED') {
-    res.status(400).json({
-      success: false,
-      data: null,
-      error: { code: 'INVALID_STATUS', message: `Deposit cannot be authorized because it is ${dep.status}` },
-    });
-    return;
-  }
-
-  // Validate that UPI PIN is provided (4 to 6 digits)
-  const trimmedPin = (pin || '').trim();
-  if (!trimmedPin || !/^\d{4,6}$/.test(trimmedPin)) {
-    res.status(400).json({
-      success: false,
-      data: null,
-      error: { code: 'INVALID_PIN', message: 'Invalid PhonePe UPI PIN. Please enter your 4 or 6-digit PIN.' },
-    });
-    return;
-  }
-
-  const appLabel = app ? app.toUpperCase() : 'PHONEPE';
-  const phonePeTxnId = `T${Date.now().toString().slice(-10)}${Math.floor(1000 + Math.random() * 9000)}`;
-  const amount = Number(dep.amount);
-  const currentRate = getCurrentUsdInrRate();
-  const calculatedInr = Math.round(amount * currentRate);
-
-  // Atomically credit live balance and mark deposit COMPLETED
-  const out = await prisma.$transaction(async (tx) => {
-    const acct = await tx.account.findUnique({ where: { id: dep.accountId } });
-    if (!acct) throw new Error('Account missing');
-    const newBal = Number(acct.balance) + amount;
-
-    await tx.account.update({ where: { id: acct.id }, data: { balance: newBal } });
-
-    await tx.walletTransaction.create({
-      data: {
-        accountId: acct.id,
-        type: 'DEPOSIT',
-        amount,
-        balanceAfter: newBal,
-        reference: phonePeTxnId,
-        memo: `PhonePe Gateway payment authorized (Txn: ${phonePeTxnId}, ₹${calculatedInr.toLocaleString('en-IN')})`,
-      },
-    });
-
-    const completed = await tx.deposit.update({
-      where: { id: dep.id },
-      data: {
-        status: 'COMPLETED',
-        providerRef: `${dep.providerRef || dep.id} | PhonePe: ${phonePeTxnId}`,
-      },
-    });
-
-    return { newBal, completed };
-  });
-
-  emitToUser(req.userId!, 'balance:updated', { accountId: dep.accountId, balance: out.newBal });
-
-  await notify({
-    userId: req.userId!,
-    type: 'DEPOSIT',
-    title: 'PhonePe Payment Confirmed! ⚡',
-    message: `₹${calculatedInr.toLocaleString('en-IN')} ($${amount.toFixed(2)} USD) authorized via ${appLabel}. Txn ID: ${phonePeTxnId}. Balance updated!`,
-  });
-
-  await audit({
-    actorId: req.userId,
-    action: 'PHONEPE_DEPOSIT_AUTHORIZED',
-    entityType: 'Deposit',
-    entityId: dep.id,
-    metadata: { txnId: phonePeTxnId, app: appLabel, amount, inrAmount: calculatedInr, exchangeRate: currentRate, newBalance: out.newBal },
-  });
-
-  res.json({
-    success: true,
-    data: {
-      depositId: dep.id,
-      status: 'COMPLETED',
-      balance: out.newBal,
-      amount,
-      inrAmount: calculatedInr,
-      txnId: phonePeTxnId,
-      rate: `1 USD = ₹${currentRate.toFixed(2)}`,
-      app: appLabel,
-    },
-    error: null,
-  });
-}));
-
-// 6c. Verified 12-Digit NPCI Bank UTR Reconciliation
-r.post('/:id/verify-utr', ah(async (req: AuthedRequest, res) => {
-  const { utr } = req.body as { utr?: string };
-  const dep = await prisma.deposit.findFirst({
-    where: { id: req.params.id, userId: req.userId! },
-  });
-  if (!dep) {
-    res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'Deposit invoice not found' } });
-    return;
-  }
-  if (dep.status === 'COMPLETED') {
-    const acct = await prisma.account.findUnique({ where: { id: dep.accountId } });
-    res.json({
-      success: true,
-      data: { depositId: dep.id, status: 'COMPLETED', alreadyCompleted: true, balance: acct ? Number(acct.balance) : 0 },
-      error: null,
-    });
-    return;
-  }
-
-  const cleanUtr = (utr || '').trim().replace(/\s+/g, '');
-  if (!/^\d{12}$/.test(cleanUtr)) {
-    res.status(400).json({
-      success: false,
-      data: null,
-      error: { code: 'INVALID_UTR', message: 'Please enter the valid 12-digit UTR from your PhonePe receipt.' },
-    });
-    return;
-  }
-
-  // Check if UTR was already claimed
-  const existing = await prisma.deposit.findFirst({
-    where: {
-      providerRef: { contains: cleanUtr },
-      status: 'COMPLETED',
-    },
-  });
-  if (existing) {
-    res.status(400).json({
-      success: false,
-      data: null,
-      error: { code: 'DUPLICATE_UTR', message: 'This 12-digit UTR has already been claimed on another deposit.' },
-    });
-    return;
-  }
-
-  const amount = Number(dep.amount);
-  const currentRate = getCurrentUsdInrRate();
-  const calculatedInr = Math.round(amount * currentRate);
-
-  const out = await prisma.$transaction(async (tx) => {
-    const acct = await tx.account.findUnique({ where: { id: dep.accountId } });
-    if (!acct) throw new Error('Account missing');
-    const newBal = Number(acct.balance) + amount;
-
-    await tx.account.update({ where: { id: acct.id }, data: { balance: newBal } });
-
-    await tx.walletTransaction.create({
-      data: {
-        accountId: acct.id,
-        type: 'DEPOSIT',
-        amount,
-        balanceAfter: newBal,
-        reference: cleanUtr,
-        memo: `PhonePe Bank transfer verified with 12-digit UTR (${cleanUtr})`,
-      },
-    });
-
-    const completed = await tx.deposit.update({
-      where: { id: dep.id },
-      data: {
-        status: 'COMPLETED',
-        providerRef: `${dep.providerRef || dep.id} | UTR: ${cleanUtr}`,
-      },
-    });
-
-    return { newBal, completed };
-  });
-
-  emitToUser(req.userId!, 'balance:updated', { accountId: dep.accountId, balance: out.newBal });
-
-  await notify({
-    userId: req.userId!,
-    type: 'DEPOSIT',
-    title: 'PhonePe UTR Verified! ⚡',
-    message: `₹${calculatedInr.toLocaleString('en-IN')} ($${amount.toFixed(2)} USD) credited via verified UTR ${cleanUtr}. Balance updated!`,
-  });
-
-  res.json({
-    success: true,
-    data: {
-      depositId: dep.id,
-      status: 'COMPLETED',
-      balance: out.newBal,
-      amount,
-      inrAmount: calculatedInr,
-      utr: cleanUtr,
-    },
-    error: null,
-  });
-}));
-
 // 7. UPI Payment Failure / Rejection (Balance is NOT updated)
 r.post('/:id/fail', ah(async (req: AuthedRequest, res) => {
   const { reason, app } = req.body as { reason?: string; app?: string };
@@ -789,6 +334,10 @@ r.post('/:id/fail', ah(async (req: AuthedRequest, res) => {
     return;
   }
 
+  if (dep.proofRef) {
+    res.status(400).json({ success: false, data: null, error: { code: 'UNDER_REVIEW', message: 'Payment reference already submitted — this deposit is being verified' } });
+    return;
+  }
   if (dep.status === 'COMPLETED') {
     res.status(400).json({ success: false, data: null, error: { code: 'ALREADY_COMPLETED', message: 'Completed deposits cannot be marked as failed' } });
     return;

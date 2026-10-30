@@ -9,7 +9,7 @@ describe('DemoMarketProvider candles', () => {
   afterAll(async () => { await provider.stop(); });
 
   it('offers second-level timeframes like a fixed-time-trade terminal', () => {
-    expect(TIMEFRAME_KEYS).toEqual(['5s', '10s', '15s', '30s', '1m', '5m', '15m', '30m', '1h', '4h', '1d']);
+    expect(TIMEFRAME_KEYS).toEqual(['5s', '10s', '15s', '30s', '1m', '2m', '5m', '15m', '30m', '1h', '4h', '1d']);
     expect(provider.getTimeframes()).toEqual(TIMEFRAME_KEYS);
   });
 

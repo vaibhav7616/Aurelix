@@ -39,6 +39,7 @@
     "jsonwebtoken": "^9.0.2",
     "pino": "^9.4.0",
     "pino-http": "^10.2.0",
+    "prisma": "^5.22.0",
     "socket.io": "^4.7.5",
     "ws": "^8.22.0",
     "zod": "^3.23.8"
@@ -56,7 +57,6 @@
     "@typescript-eslint/parser": "^7.16.0",
     "eslint": "^8.57.0",
     "pino-pretty": "^11.2.2",
-    "prisma": "^5.18.0",
     "supertest": "^7.0.0",
     "tsx": "^4.16.2",
     "typescript": "^5.5.0",

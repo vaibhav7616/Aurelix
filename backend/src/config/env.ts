@@ -24,10 +24,35 @@ export const env = {
   PAYMENT_PROVIDER: process.env.PAYMENT_PROVIDER ?? 'demo',
   DEMO_STARTING_BALANCE: parseInt(process.env.DEMO_STARTING_BALANCE ?? '10000', 10),
   DEMO_TICK_INTERVAL_MS: parseInt(process.env.DEMO_TICK_INTERVAL_MS ?? '40', 10),
+  /** a quote older than this is stale: no new trades open on it and settlement won't use it */
+  MAX_QUOTE_AGE_MS: parseInt(process.env.MAX_QUOTE_AGE_MS ?? '5000', 10),
   isProd: (process.env.NODE_ENV ?? 'development') === 'production',
 };
 
-if (env.JWT_SECRET.length < 32 || env.JWT_REFRESH_SECRET.length < 32) {
+/** Production must never boot on development defaults — a known JWT secret lets anyone forge logins. */
+export function productionConfigErrors(e: NodeJS.ProcessEnv): string[] {
+  const errs: string[] = [];
+  for (const k of ['DATABASE_URL', 'JWT_SECRET', 'JWT_REFRESH_SECRET', 'FRONTEND_URL', 'CORS_ORIGINS']) {
+    if (!e[k]) errs.push(`${k} must be set`);
+  }
+  for (const k of ['JWT_SECRET', 'JWT_REFRESH_SECRET']) {
+    const v = e[k] ?? '';
+    if (v && (v.length < 32 || /change-me|dev-/i.test(v))) errs.push(`${k} must be a random secret of 32+ characters`);
+  }
+  if (e.JWT_SECRET && e.JWT_SECRET === e.JWT_REFRESH_SECRET) errs.push('JWT_SECRET and JWT_REFRESH_SECRET must differ');
+  if (/aurelix_dev_secret/.test(e.DATABASE_URL ?? '')) errs.push('DATABASE_URL uses the development database password');
+  if ((e.MARKET_PROVIDER ?? 'demo') === 'demo') errs.push('MARKET_PROVIDER=demo runs on simulated prices — set MARKET_PROVIDER=real');
+  return errs;
+}
+
+if (env.isProd) {
+  const errs = productionConfigErrors(process.env);
+  if (errs.length) {
+    // eslint-disable-next-line no-console
+    console.error(`[aurelix] refusing to start in production:\n  - ${errs.join('\n  - ')}`);
+    process.exit(1);
+  }
+} else if (env.JWT_SECRET.length < 32 || env.JWT_REFRESH_SECRET.length < 32) {
   // eslint-disable-next-line no-console
   console.warn('[aurelix] WARNING: JWT secrets look short — use 32+ char secrets in production.');
 }

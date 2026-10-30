@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { get, post, apiError } from '../../lib/api';
 import { useTerminal } from '../../stores/terminalStore';
 import { useUI } from '../../stores/uiStore';
@@ -108,7 +108,7 @@ const DEPOSIT_METHODS = [
     name: 'USDT (Tether)',
     badge: 'TRC-20',
     category: 'crypto',
-    desc: 'Instant · Lowest fee · Tron network',
+    desc: 'Lowest fee · Tron network',
     icon: '₮',
     recommended: true,
   },
@@ -125,13 +125,13 @@ const DEPOSIT_METHODS = [
     name: 'Ethereum',
     badge: 'ERC-20',
     category: 'crypto',
-    desc: 'Ethereum network · Fast settlement',
+    desc: 'Ethereum network',
     icon: 'Ξ',
   },
   {
     id: 'upi_qr',
-    name: 'UPI / Fast QR',
-    badge: 'INSTANT',
+    name: 'UPI QR',
+    badge: 'UPI',
     category: 'epay',
     desc: 'PhonePe, GPay, Paytm, BHIM · ₹ INR',
     icon: '⚡',
@@ -144,14 +144,6 @@ const DEPOSIT_METHODS = [
     category: 'bank',
     desc: 'Direct Wire · Global / Local accounts',
     icon: '🏦',
-  },
-  {
-    id: 'cards',
-    name: 'Bank Cards',
-    badge: 'VISA / MC',
-    category: 'card',
-    desc: 'Debit / Credit cards · 3D Secure',
-    icon: '💳',
   },
 ];
 
@@ -231,9 +223,10 @@ export function WalletPage() {
 
   // Prefer LIVE account for Cashier / Real Deposits
   const liveAccount = accounts?.find((a) => a.accountType === 'LIVE');
-  const demoAccount = accounts?.find((a) => a.accountType === 'DEMO');
   const selectedAccount = accounts?.find((a) => a.id === accountId) ?? liveAccount ?? accounts?.[0];
   const targetId = selectedAccount?.id;
+  // Deposits and withdrawals are only allowed on LIVE accounts (backend returns 422 LIVE_ONLY otherwise)
+  const isLiveSelected = selectedAccount?.accountType === 'LIVE';
 
   const { data: wallet } = useQuery({
     queryKey: ['wallet', targetId],
@@ -269,12 +262,29 @@ export function WalletPage() {
   });
   const liveInrRate = exchangeRateData?.rate ?? 86.85;
 
+  // Deposit methods actually configured on the backend
+  const { data: methodsData, isLoading: methodsLoading, isError: methodsError } = useQuery({
+    queryKey: ['payment-methods'],
+    queryFn: () => get<{ methods: string[] }>('/api/v1/payments/methods'),
+    staleTime: 60000,
+  });
+  const availableMethods = DEPOSIT_METHODS.filter((m) => methodsData?.methods?.includes(m.id));
+
   // ─────────────────────────────────────────────────────────────
   // DEPOSIT MULTI-STEP STATE
   // ─────────────────────────────────────────────────────────────
   // step: 'FORM' (Step 1) | 'GATEWAY' (Step 2 - Next Step!) | 'CONFIRMED' (Step 3) | 'FAILED'
   const [depStep, setDepStep] = useState<'FORM' | 'GATEWAY' | 'CONFIRMED' | 'FAILED'>('FORM');
-  const [selectedMethod, setSelectedMethod] = useState('upi_qr');
+  const [selectedMethod, setSelectedMethod] = useState('');
+  // Default / re-sync the selected method to the first configured one
+  useEffect(() => {
+    if (!availableMethods.length) {
+      if (selectedMethod) setSelectedMethod('');
+      return;
+    }
+    if (!availableMethods.some((m) => m.id === selectedMethod)) setSelectedMethod(availableMethods[0].id);
+  }, [methodsData, selectedMethod]);
+  const isSelectedMethodAvailable = availableMethods.some((m) => m.id === selectedMethod);
   const [depAmount, setDepAmount] = useState('100');
   const [promoCode, setPromoCode] = useState('WELCOME50');
   const [promoInput, setPromoInput] = useState('WELCOME50');
@@ -304,21 +314,18 @@ export function WalletPage() {
   // PhonePe / UPI Quotex-style Cashier state
   const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
   const [selectedUpiApp, setSelectedUpiApp] = useState<'phonepe' | 'gpay' | 'paytm' | 'generic'>('phonepe');
-  const [upiSubTab, setUpiSubTab] = useState<'qr' | 'collect' | 'gateway' | 'utr'>('qr');
-  const [collectPhone, setCollectPhone] = useState('');
-  const [collectSentMsg, setCollectSentMsg] = useState<string | null>(null);
-  const [showPhonePeGatewayModal, setShowPhonePeGatewayModal] = useState(false);
-  const [phonePePin, setPhonePePin] = useState('');
-  const [phonePePinError, setPhonePePinError] = useState<string | null>(null);
+  const [upiSubTab, setUpiSubTab] = useState<'qr' | 'utr'>('qr');
   const [utrInput, setUtrInput] = useState('');
   const [utrError, setUtrError] = useState<string | null>(null);
 
+  // Set when the user submits a UTR / payment reference (awaiting admin verification).
+  // `credited` flips to true only when the status poll reports COMPLETED (admin approved).
   const [confirmedData, setConfirmedData] = useState<{
     amount: number;
     inrAmount?: number;
-    utr: string;
-    app: string;
-    balance: number;
+    reference: string;
+    method: string;
+    credited: boolean;
   } | null>(null);
   const [failedData, setFailedData] = useState<{
     reason: string;
@@ -334,8 +341,11 @@ export function WalletPage() {
     return () => clearInterval(t);
   }, [depStep]);
 
-  // Automated background polling for deposit invoice status (Quotex real-time banking detection)
-  const isAwaitingPayment = depStep === 'GATEWAY' && !!activeDepositOrder?.depositId;
+  // Background polling for deposit status: while paying (GATEWAY) and while the submitted
+  // reference awaits admin verification (CONFIRMED but not yet credited).
+  const isAwaitingPayment =
+    !!activeDepositOrder?.depositId &&
+    (depStep === 'GATEWAY' || (depStep === 'CONFIRMED' && !confirmedData?.credited));
   const { data: pollStatus } = useQuery({
     queryKey: ['deposit-status-poll', activeDepositOrder?.depositId],
     queryFn: () =>
@@ -353,25 +363,28 @@ export function WalletPage() {
   useEffect(() => {
     if (!isAwaitingPayment || !pollStatus) return;
     if (pollStatus.status === 'COMPLETED') {
-      setConfirmedData({
+      setConfirmedData((prev) => ({
         amount: pollStatus.amount,
-        inrAmount: Math.round(pollStatus.amount * liveInrRate),
-        utr: pollStatus.providerRef || `PhonePe-${Date.now().toString().slice(-8)}`,
-        app: 'PhonePe',
-        balance: pollStatus.balance,
-      });
-      setShowPhonePeGatewayModal(false);
+        inrAmount: prev?.inrAmount ?? activeDepositOrder?.gatewayData.amountInr,
+        reference: pollStatus.providerRef || prev?.reference || '',
+        method: prev?.method ?? activeDepositOrder?.method ?? '',
+        credited: true,
+      }));
       setDepStep('CONFIRMED');
-      push('ok', `⚡ Payment verified by PhonePe banking network! $${pollStatus.amount.toFixed(2)} USD credited.`);
+      push('ok', `Deposit verified and credited: $${pollStatus.amount.toFixed(2)} USD.`);
       ['wallet', 'accounts', 'wallet-txns', 'deposits-list'].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
     } else if (pollStatus.status === 'FAILED' || pollStatus.status === 'CANCELLED') {
+      const wasSubmitted = depStep === 'CONFIRMED';
       setFailedData({
-        reason: 'Payment cancelled or declined by user / bank',
+        reason: wasSubmitted
+          ? 'Your payment could not be verified and the deposit was rejected. Contact support if you believe this is an error.'
+          : 'Payment cancelled or declined by user / bank',
         currentBalance: pollStatus.balance,
       });
-      setShowPhonePeGatewayModal(false);
       setDepStep('FAILED');
-      push('info', 'Payment cancelled or declined. Your account balance was not modified.');
+      push('info', wasSubmitted
+        ? 'Deposit was not approved. Your account balance was not modified.'
+        : 'Payment cancelled or declined. Your account balance was not modified.');
       ['deposits-list', 'wallet', 'accounts'].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
     }
   }, [pollStatus?.status, isAwaitingPayment]);
@@ -421,10 +434,7 @@ export function WalletPage() {
       setDepStep('GATEWAY'); // MOVE TO NEXT STEP!
       setSelectedUpiApp('phonepe');
       setUpiSubTab('qr');
-      setCollectSentMsg(null);
-      setCollectPhone('');
-      setPhonePePin('');
-      setPhonePePinError(null);
+      setConfirmedData(null);
       setUtrInput('');
       setUtrError(null);
       setProofRef('');
@@ -435,82 +445,27 @@ export function WalletPage() {
     onError: (e) => push('err', apiError(e)),
   });
 
-  // PhonePe Gateway Official PIN Authorization Mutation
-  const phonePeAuthorize = useMutation({
-    mutationFn: () =>
-      post<{
-        depositId: string;
-        status: string;
-        balance: number;
-        amount: number;
-        inrAmount: number;
-        txnId: string;
-        rate: string;
-        app: string;
-      }>(`/api/v1/payments/${activeDepositOrder?.depositId}/phonepe-authorize`, {
-        pin: phonePePin,
-        app: 'PHONEPE',
-      }),
-    onSuccess: (data) => {
-      setConfirmedData({
-        amount: data.amount,
-        inrAmount: data.inrAmount,
-        utr: data.txnId,
-        app: 'PhonePe',
-        balance: data.balance,
-      });
-      setShowPhonePeGatewayModal(false);
-      setDepStep('CONFIRMED');
-      push('ok', `⚡ PhonePe Payment Verified! $${data.amount.toFixed(2)} USD credited to Live balance.`);
-      ['wallet', 'accounts', 'wallet-txns', 'deposits-list'].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
-    },
-    onError: (e) => {
-      const msg = apiError(e);
-      setPhonePePinError(msg);
-      push('err', msg);
-    },
-  });
-
-  // PhonePe Mobile Number Collect Request Mutation
-  const phonePeCollect = useMutation({
-    mutationFn: () =>
-      post<{ message: string; targetIdentifier: string; inrAmount: number }>(
-        `/api/v1/payments/${activeDepositOrder?.depositId}/phonepe-collect`,
-        {
-          phone: collectPhone,
-        }
-      ),
-    onSuccess: (data) => {
-      setCollectSentMsg(data.message);
-      push('ok', 'Collect request sent to PhonePe! Open your PhonePe mobile app to approve.');
-    },
-    onError: (e) => push('err', apiError(e)),
-  });
-
   // Verified 12-Digit NPCI Bank UTR Reconciliation Mutation
   const verifyUtrMutation = useMutation({
     mutationFn: () =>
       post<{
         depositId: string;
-        status: string;
-        balance: number;
-        amount: number;
-        inrAmount: number;
+        status: 'PENDING_VERIFICATION';
         utr: string;
       }>(`/api/v1/payments/${activeDepositOrder?.depositId}/verify-utr`, {
         utr: utrInput,
       }),
     onSuccess: (data) => {
       setConfirmedData({
-        amount: data.amount,
-        inrAmount: data.inrAmount,
-        utr: data.utr,
-        app: 'PhonePe',
-        balance: data.balance,
+        amount: activeDepositOrder?.amount ?? 0,
+        inrAmount: activeDepositOrder?.gatewayData.amountInr,
+        reference: data.utr,
+        method: activeDepositOrder?.method ?? 'upi_qr',
+        credited: false,
       });
       setDepStep('CONFIRMED');
-      push('ok', `⚡ 12-Digit UTR Verified! $${data.amount.toFixed(2)} USD credited to balance.`);
-      ['wallet', 'accounts', 'wallet-txns', 'deposits-list'].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+      push('ok', 'UTR submitted. Your balance will be credited after our team verifies the payment.');
+      qc.invalidateQueries({ queryKey: ['deposits-list'] });
     },
     onError: (e) => {
       const msg = apiError(e);
@@ -547,29 +502,26 @@ export function WalletPage() {
   // Step 2 -> Step 3: Generic Submit Payment Proof (TxID / Bank wire)
   const submitProof = useMutation({
     mutationFn: () =>
-      post(`/api/v1/payments/${activeDepositOrder?.depositId}/submit-proof`, {
-        reference: proofRef,
-      }),
+      post<{ depositId: string; status: 'PENDING_VERIFICATION' }>(
+        `/api/v1/payments/${activeDepositOrder?.depositId}/submit-proof`,
+        { reference: proofRef.trim() }
+      ),
     onSuccess: () => {
+      setConfirmedData({
+        amount: activeDepositOrder?.amount ?? 0,
+        inrAmount: activeDepositOrder?.gatewayData.amountInr,
+        reference: proofRef.trim(),
+        method: activeDepositOrder?.method ?? '',
+        credited: false,
+      });
       setDepStep('CONFIRMED');
-      push('ok', 'Payment reference submitted! Verification in progress.');
+      push('ok', 'Payment reference submitted. Your balance will be credited after our team verifies the payment.');
       qc.invalidateQueries({ queryKey: ['deposits-list'] });
     },
     onError: (e) => push('err', apiError(e)),
   });
 
-  // Fast-track Instant confirmation for development/testing
-  const fastTrackConfirm = useMutation({
-    mutationFn: (id: string) => post(`/api/v1/payments/${id}/confirm`),
-    onSuccess: () => {
-      push('ok', '⚡ Real Account balance credited instantly (Sandbox test)!');
-      ['wallet', 'accounts', 'wallet-txns', 'deposits-list'].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
-      setDepStep('CONFIRMED');
-    },
-    onError: (e) => push('err', apiError(e)),
-  });
-
-  // Open Installed UPI App via Mobile Intent URL or Launch PhonePe Gateway on Desktop
+  // Open Installed UPI App via Mobile Intent URL (mobile only); on desktop show the QR to scan
   const handleOpenUpiApp = (app: 'phonepe' | 'gpay' | 'paytm' | 'generic') => {
     setSelectedUpiApp(app);
     const gateway = activeDepositOrder?.gatewayData;
@@ -586,12 +538,11 @@ export function WalletPage() {
       // Mobile Device: trigger deep link into installed PhonePe app
       window.location.href = intentUrl;
       const appName = app === 'phonepe' ? 'PhonePe' : app === 'gpay' ? 'Google Pay' : app === 'paytm' ? 'Paytm' : 'UPI';
-      push('info', `Opening ${appName} app… Authorize payment to complete deposit.`);
+      push('info', `Opening ${appName} app… After paying, submit your 12-digit UTR for verification.`);
     } else {
-      // Desktop PC: PhonePe app is mobile-only, so open PhonePe Cashier Gateway Modal / QR
-      setShowPhonePeGatewayModal(true);
+      // Desktop PC: UPI apps are mobile-only, so show the QR code to scan with a phone
       setUpiSubTab('qr');
-      push('info', 'Desktop detected: Opening PhonePe Payment Gateway.');
+      push('info', 'Scan the QR code with any UPI app on your phone.');
     }
   };
 
@@ -674,7 +625,7 @@ export function WalletPage() {
               REAL BALANCE READY
             </span>
           </div>
-          <p className="text-xs text-mute mt-0.5">Manage deposits, instant payment gateways, and withdrawals.</p>
+          <p className="text-xs text-mute mt-0.5">Manage deposits and withdrawals.</p>
         </div>
 
         {/* Account Selector Pill */}
@@ -741,7 +692,7 @@ export function WalletPage() {
             key={tab.id}
             onClick={() => {
               setActiveTab(tab.id as never);
-              if (tab.id === 'deposit' && depStep === 'CONFIRMED') setDepStep('FORM');
+              if (tab.id === 'deposit' && depStep === 'CONFIRMED' && confirmedData?.credited) setDepStep('FORM');
               if (tab.id === 'withdraw' && wdStep === 'SUCCESS') setWdStep('FORM');
             }}
             className={clsx(
@@ -773,12 +724,53 @@ export function WalletPage() {
             </span>
             <span>→</span>
             <span className={clsx('px-2.5 py-1 rounded-full text-[11px]', depStep === 'CONFIRMED' ? 'bg-[#00c076] text-base-950 font-black' : 'bg-base-800 text-mute')}>
-              3. Credited & Verified
+              3. Verification
             </span>
           </div>
 
           {/* ── STEP 1: METHOD & AMOUNT SELECTION ─────────────────────── */}
           {depStep === 'FORM' && (
+            <>
+          {!isLiveSelected && (
+            <div className="max-w-xl mx-auto">
+              <Card className="text-center py-8 px-6 space-y-3 border-amber-400/50">
+                <h2 className="text-lg font-black text-white">Deposits are only available on Live accounts</h2>
+                <p className="text-xs text-mute">
+                  The selected account is a practice (demo) account. Switch to your Live account to continue.
+                </p>
+                {liveAccount ? (
+                  <button
+                    onClick={() => setAccountId(liveAccount.id)}
+                    className="px-4 py-2.5 rounded-xl bg-[#00c076] hover:bg-[#00d684] text-base-950 font-black text-xs uppercase tracking-wider transition"
+                  >
+                    Switch to Live Account ({liveAccount.accountNumber})
+                  </button>
+                ) : (
+                  <p className="text-xs text-amber-300">No Live account found. Please contact support.</p>
+                )}
+              </Card>
+            </div>
+          )}
+
+          {isLiveSelected && methodsLoading && (
+            <Card className="text-center py-8 text-xs text-mute">Loading payment methods…</Card>
+          )}
+
+          {isLiveSelected && !methodsLoading && availableMethods.length === 0 && (
+            <div className="max-w-xl mx-auto">
+              <Card className="text-center py-8 px-6 space-y-2 border-amber-400/50">
+                <h2 className="text-lg font-black text-white">Deposits are temporarily unavailable</h2>
+                <p className="text-xs text-mute">
+                  {methodsError
+                    ? 'We could not load the available payment methods.'
+                    : 'No deposit methods are currently available.'}{' '}
+                  Please contact support.
+                </p>
+              </Card>
+            </div>
+          )}
+
+          {isLiveSelected && availableMethods.length > 0 && (
             <div className="grid lg:grid-cols-3 gap-5">
               {/* Left 2 Cols: Payment Methods Grid */}
               <div className="lg:col-span-2 space-y-4">
@@ -786,7 +778,7 @@ export function WalletPage() {
                   <SectionTitle title="Choose Payment Method" right={<span className="text-[11px] text-[#00c076] font-bold">Fast & Secure</span>} />
                   
                   <div className="grid sm:grid-cols-2 gap-3 mt-3">
-                    {DEPOSIT_METHODS.map((m) => {
+                    {availableMethods.map((m) => {
                       const isSel = selectedMethod === m.id;
                       return (
                         <div
@@ -932,7 +924,7 @@ export function WalletPage() {
                               ['WELCOME50', '+50% Welcome'],
                               ['BONUS30', '+30% Booster'],
                               ['VIP100', '+100% VIP'],
-                              ['RISKFREE', 'Risk-Free Trades'],
+                              ['RISKFREE', '+20% Bonus'],
                             ].map(([code, label]) => (
                               <button
                                 key={code}
@@ -997,7 +989,7 @@ export function WalletPage() {
                     )}
 
                     <div className="pt-2 border-t border-line flex justify-between items-center">
-                      <span className="font-bold text-white">Total Credited:</span>
+                      <span className="font-bold text-white">Total After Verification:</span>
                       <span className="text-base font-mono font-black text-[#00c076]">{fmtMoney(totalCreditAmount)}</span>
                     </div>
                   </div>
@@ -1005,18 +997,20 @@ export function WalletPage() {
                   {/* Proceed to Step 2 Button */}
                   <button
                     onClick={() => createDepositOrder.mutate()}
-                    disabled={createDepositOrder.isPending || parsedDepAmt < 10}
+                    disabled={createDepositOrder.isPending || parsedDepAmt < 10 || !isSelectedMethodAvailable || !isLiveSelected}
                     className="w-full py-3 rounded-xl bg-[#00c076] hover:bg-[#00d684] text-base-950 font-black text-xs uppercase tracking-wider transition shadow-lg active:scale-98 disabled:opacity-50"
                   >
                     {createDepositOrder.isPending ? 'Generating Gateway Invoice…' : 'Proceed to Next Step →'}
                   </button>
 
                   <p className="text-[10px] text-center text-mute mt-2">
-                    🔒 256-bit SSL encrypted. Real money deposit gateway.
+                    Your balance is credited after our team verifies your payment.
                   </p>
                 </Card>
               </div>
             </div>
+          )}
+            </>
           )}
 
           {/* ── STEP 2: PAYMENT GATEWAY INSTRUCTIONS (THE NEXT STEP) ───── */}
@@ -1140,36 +1134,7 @@ export function WalletPage() {
                             }`}
                           >
                             <span>📷</span>
-                            <span>PhonePe QR Code</span>
-                            <span className="text-[9px] px-1 py-0.2 rounded bg-[#00c076]/20 text-[#00c076] font-bold">
-                              FASTEST
-                            </span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => setUpiSubTab('collect')}
-                            className={`px-3 py-2 rounded-t-lg text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap ${
-                              upiSubTab === 'collect'
-                                ? 'bg-base-800 text-white border-t-2 border-[#5f259f] shadow-sm'
-                                : 'text-mute hover:text-white hover:bg-base-900/50'
-                            }`}
-                          >
-                            <span>📲</span>
-                            <span>PhonePe Mobile Request</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => setUpiSubTab('gateway')}
-                            className={`px-3 py-2 rounded-t-lg text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap ${
-                              upiSubTab === 'gateway'
-                                ? 'bg-base-800 text-white border-t-2 border-[#5f259f] shadow-sm'
-                                : 'text-mute hover:text-white hover:bg-base-900/50'
-                            }`}
-                          >
-                            <span>🌐</span>
-                            <span>PhonePe Web Gateway</span>
+                            <span>UPI QR Code</span>
                           </button>
 
                           <button
@@ -1182,7 +1147,7 @@ export function WalletPage() {
                             }`}
                           >
                             <span>🔍</span>
-                            <span>Verify 12-Digit UTR</span>
+                            <span>Submit 12-Digit UTR</span>
                           </button>
                         </div>
 
@@ -1222,7 +1187,7 @@ export function WalletPage() {
                                   <span className="w-4 h-4 rounded-full bg-[#5f259f] text-white inline-flex items-center justify-center text-[9px] font-black">
                                     पे
                                   </span>
-                                  <span>PhonePe Verified Merchant</span>
+                                  <span>Any UPI app</span>
                                 </div>
                               </div>
 
@@ -1231,9 +1196,6 @@ export function WalletPage() {
                                 <div>
                                   <h4 className="text-sm font-black text-white flex items-center gap-2">
                                     <span>Scan with PhonePe or any UPI App</span>
-                                    <span className="text-[9px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold">
-                                      AUTO-DETECT
-                                    </span>
                                   </h4>
                                   <p className="text-mute text-xs mt-1">
                                     Use your smartphone to scan this QR code using PhonePe, Google Pay, Paytm, or BHIM.
@@ -1248,7 +1210,7 @@ export function WalletPage() {
                                     </span>
                                   </div>
                                   <div className="flex justify-between items-center text-slate-400">
-                                    <span>Credited to Live Balance:</span>
+                                    <span>Deposit Amount:</span>
                                     <span className="font-bold text-white">
                                       +${activeDepositOrder.amount.toFixed(2)} USD
                                     </span>
@@ -1274,155 +1236,44 @@ export function WalletPage() {
                                 <ol className="list-decimal list-inside space-y-1 text-slate-300 text-[11px]">
                                   <li>Open <strong className="text-purple-300">PhonePe</strong> on your mobile phone</li>
                                   <li>Tap the <strong className="text-white">QR Scanner icon</strong> at the top right</li>
-                                  <li>Point camera at this screen and authorize payment</li>
-                                  <li>Your Live account updates automatically upon bank receipt</li>
+                                  <li>Point camera at this screen and complete the payment in your UPI app</li>
+                                  <li>Copy the 12-digit UTR / UPI Ref ID from your payment receipt and submit it in the <strong className="text-white">Submit 12-Digit UTR</strong> tab</li>
+                                  <li>Your Live balance is credited after our team verifies the payment</li>
                                 </ol>
                               </div>
                             </div>
 
-                            {/* Live Radar Detection Status */}
-                            <div className="p-3.5 rounded-xl bg-gradient-to-r from-purple-950/30 via-base-900 to-base-900 border border-purple-500/20 flex items-center justify-between">
-                              <div className="flex items-center gap-3">
-                                <div className="relative flex items-center justify-center w-8 h-8">
-                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-20" />
-                                  <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500" />
-                                </div>
-                                <div>
-                                  <div className="text-xs font-bold text-white">
-                                    Live Bank Listener Active
-                                  </div>
-                                  <div className="text-[10px] text-mute">
-                                    Checking NPCI / PhonePe banking status every 2.5 seconds…
-                                  </div>
-                                </div>
-                              </div>
-                              <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/60 px-2 py-1 rounded border border-emerald-500/30">
-                                LIVE POLLING
-                              </span>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* TAB 2: PHONEPE MOBILE REQUEST (COLLECT) */}
-                        {upiSubTab === 'collect' && (
-                          <div className="p-5 rounded-2xl bg-base-950 border border-line space-y-4">
-                            <div>
-                              <h4 className="text-sm font-black text-white flex items-center gap-2">
-                                <span>Send Collect Request to PhonePe App</span>
-                                <span className="text-[9px] px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-bold">
-                                  EXPRESS
-                                </span>
-                              </h4>
-                              <p className="text-mute text-xs mt-1">
-                                Enter your 10-digit mobile number registered with PhonePe. We will send a payment notification directly to your phone.
-                              </p>
-                            </div>
-
-                            <div className="space-y-3 max-w-md">
+                            {/* Next step hint */}
+                            <div className="p-3.5 rounded-xl bg-base-900 border border-line flex items-center justify-between gap-3">
                               <div>
-                                <label className="text-xs text-mute font-bold uppercase block mb-1">
-                                  PhonePe Mobile Number
-                                </label>
-                                <div className="flex items-center gap-2">
-                                  <span className="px-3 py-2.5 rounded-xl bg-base-900 border border-line text-xs font-bold text-slate-300">
-                                    +91
-                                  </span>
-                                  <input
-                                    type="tel"
-                                    maxLength={10}
-                                    placeholder="Enter 10-digit mobile (e.g. 9876543210)"
-                                    value={collectPhone}
-                                    onChange={(e) => setCollectPhone(e.target.value.replace(/\D/g, ''))}
-                                    className="ax-input flex-1 !font-mono text-sm !bg-base-900 font-bold text-white tracking-wider"
-                                  />
+                                <div className="text-xs font-bold text-white">Paid already?</div>
+                                <div className="text-[10px] text-mute">
+                                  Submit your 12-digit UTR so our team can verify the payment and credit your balance.
                                 </div>
                               </div>
-
                               <button
                                 type="button"
-                                onClick={() => phonePeCollect.mutate()}
-                                disabled={phonePeCollect.isPending || collectPhone.length !== 10}
-                                className="w-full py-3 px-4 rounded-xl bg-[#5f259f] hover:bg-[#6f2fb8] disabled:opacity-40 text-white font-black text-xs uppercase tracking-wider transition shadow-lg active:scale-98 flex items-center justify-center gap-2"
+                                onClick={() => setUpiSubTab('utr')}
+                                className="px-3 py-1.5 rounded-lg bg-[#00c076]/20 hover:bg-[#00c076] text-[#00c076] hover:text-base-950 font-black text-[11px] transition whitespace-nowrap border border-[#00c076]/50"
                               >
-                                {phonePeCollect.isPending ? (
-                                  <>
-                                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                                    </svg>
-                                    <span>Sending Request to PhonePe…</span>
-                                  </>
-                                ) : (
-                                  <span>📲 Send Payment Request (₹{activeDepositOrder.gatewayData.amountInr?.toLocaleString()})</span>
-                                )}
-                              </button>
-
-                              {collectSentMsg && (
-                                <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-emerald-300 text-xs space-y-1">
-                                  <div className="font-bold flex items-center gap-1.5">
-                                    <span>✓</span>
-                                    <span>{collectSentMsg}</span>
-                                  </div>
-                                  <p className="text-[11px] text-emerald-400/80">
-                                    Please unlock your phone, tap the PhonePe push notification or check notifications in the PhonePe app, and approve payment.
-                                  </p>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* TAB 3: PHONEPE WEB GATEWAY */}
-                        {upiSubTab === 'gateway' && (
-                          <div className="p-5 rounded-2xl bg-base-950 border border-line space-y-4">
-                            <div>
-                              <h4 className="text-sm font-black text-white flex items-center gap-2">
-                                <span>PhonePe Web Checkout Gateway</span>
-                                <span className="text-[9px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-bold">
-                                  DIRECT PORTAL
-                                </span>
-                              </h4>
-                              <p className="text-mute text-xs mt-1">
-                                Open the interactive PhonePe Web Portal to complete your transaction with two-factor authorization.
-                              </p>
-                            </div>
-
-                            <div className="p-4 rounded-xl bg-gradient-to-br from-[#5f259f]/20 to-base-900 border border-[#5f259f]/30 flex flex-col sm:flex-row items-center justify-between gap-4">
-                              <div className="flex items-center gap-3">
-                                <div className="w-12 h-12 rounded-xl bg-[#5f259f] flex items-center justify-center text-white font-black text-2xl shadow-md">
-                                  पे
-                                </div>
-                                <div>
-                                  <div className="text-sm font-bold text-white">PhonePe Secure Checkout</div>
-                                  <div className="text-xs text-mute">
-                                    Payable Amount: <span className="font-bold text-emerald-400 font-mono">₹{activeDepositOrder.gatewayData.amountInr?.toLocaleString()} INR</span> (${activeDepositOrder.amount.toFixed(2)} USD)
-                                  </div>
-                                </div>
-                              </div>
-
-                              <button
-                                type="button"
-                                onClick={() => setShowPhonePeGatewayModal(true)}
-                                className="px-5 py-3 rounded-xl bg-[#5f259f] hover:bg-[#6f2fb8] text-white font-black text-xs uppercase tracking-wider transition shadow-lg active:scale-98"
-                              >
-                                Launch PhonePe Gateway →
+                                Submit UTR →
                               </button>
                             </div>
                           </div>
                         )}
 
-                        {/* TAB 4: VERIFY 12-DIGIT UTR */}
+                        {/* TAB 2: SUBMIT 12-DIGIT UTR */}
                         {upiSubTab === 'utr' && (
                           <div className="p-5 rounded-2xl bg-base-950 border border-line space-y-4">
                             <div>
                               <h4 className="text-sm font-black text-white flex items-center gap-2">
-                                <span>Manual 12-Digit NPCI UTR Verification</span>
+                                <span>Submit 12-Digit UTR / UPI Reference</span>
                                 <span className="text-[9px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold">
                                   BANK RECEIPT
                                 </span>
                               </h4>
                               <p className="text-mute text-xs mt-1">
-                                Already transferred money via PhonePe or your banking app? Enter the 12-digit UTR / UPI Ref ID from your payment receipt to verify and credit your Live balance.
+                                Already paid via your UPI or banking app? Enter the 12-digit UTR / UPI Ref ID from your payment receipt. Your Live balance is credited after our team verifies the payment.
                               </p>
                             </div>
 
@@ -1459,10 +1310,10 @@ export function WalletPage() {
                                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                                     </svg>
-                                    <span>Verifying with NPCI Bank Network…</span>
+                                    <span>Submitting…</span>
                                   </>
                                 ) : (
-                                  <span>✓ Verify UTR & Credit ${activeDepositOrder.amount.toFixed(2)} USD</span>
+                                  <span>Submit UTR for Verification</span>
                                 )}
                               </button>
                             </div>
@@ -1525,19 +1376,6 @@ export function WalletPage() {
                     </div>
                   )}
 
-                  {/* If CARDS */}
-                  {activeDepositOrder.gatewayData.type === 'card' && (
-                    <div className="space-y-3">
-                      <div className="p-3 bg-base-950 rounded-xl border border-line space-y-2">
-                        <input placeholder="Cardholder Name" className="ax-input text-xs" />
-                        <input placeholder="Card Number (16 digits)" className="ax-input text-xs font-mono" />
-                        <div className="grid grid-cols-2 gap-2">
-                          <input placeholder="MM / YY" className="ax-input text-xs font-mono" />
-                          <input placeholder="CVV" type="password" maxLength={4} className="ax-input text-xs font-mono" />
-                        </div>
-                      </div>
-                    </div>
-                  )}
                 </div>
 
                 {/* Step 2 Actions for non-UPI methods (or generic back button) */}
@@ -1549,7 +1387,7 @@ export function WalletPage() {
                         disabled={submitProof.isPending || !proofRef.trim()}
                         className="flex-1 py-3 rounded-xl bg-[#00c076] hover:bg-[#00d684] text-base-950 font-black text-xs uppercase tracking-wider transition shadow-lg active:scale-98 disabled:opacity-50"
                       >
-                        {submitProof.isPending ? 'Verifying Reference…' : 'I Have Paid / Submit Proof →'}
+                        {submitProof.isPending ? 'Submitting…' : 'I Have Paid / Submit Reference →'}
                       </button>
                     ) : (
                       <button
@@ -1569,82 +1407,99 @@ export function WalletPage() {
                     )}
                   </div>
 
-                  {/* Fast-Track Sandbox Button for Quick Testing */}
-                  <div className="p-3 rounded-lg bg-base-950 border border-dashed border-[#00c076]/40 flex items-center justify-between">
-                    <div>
-                      <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                        <span>⚡ Sandbox Fast-Track</span>
-                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-[#00c076]/20 text-[#00c076] font-bold">DEV TEST</span>
-                      </div>
-                      <div className="text-[10px] text-mute">Simulate instant blockchain/bank confirmation to credit real balance immediately.</div>
-                    </div>
-                    <button
-                      onClick={() => fastTrackConfirm.mutate(activeDepositOrder.depositId)}
-                      disabled={fastTrackConfirm.isPending}
-                      className="px-3 py-1.5 rounded-lg bg-[#00c076]/20 hover:bg-[#00c076] text-[#00c076] hover:text-base-950 font-black text-[11px] transition whitespace-nowrap border border-[#00c076]/50"
-                    >
-                      {fastTrackConfirm.isPending ? 'Crediting…' : 'Simulate Confirm'}
-                    </button>
-                  </div>
                 </div>
               </Card>
             </div>
           )}
 
-          {/* ── STEP 3: DEPOSIT CONFIRMATION / VERIFICATION SCREEN ─────── */}
+          {/* ── STEP 3: SUBMITTED (AWAITING VERIFICATION) / CREDITED SCREEN ─────── */}
           {depStep === 'CONFIRMED' && (
             <div className="max-w-xl mx-auto">
-              <Card className="text-center py-8 px-6 space-y-4 border-[#00c076]/60 bg-gradient-to-b from-[#00c076]/5 to-transparent">
-                <div className="w-16 h-16 rounded-full bg-[#00c076]/20 border-2 border-[#00c076] flex items-center justify-center mx-auto text-3xl text-[#00c076] animate-bounce">
-                  ✓
-                </div>
+              <Card
+                className={clsx(
+                  'text-center py-8 px-6 space-y-4',
+                  confirmedData?.credited
+                    ? 'border-[#00c076]/60 bg-gradient-to-b from-[#00c076]/5 to-transparent'
+                    : 'border-amber-400/60 bg-gradient-to-b from-amber-400/5 to-transparent'
+                )}
+              >
+                {confirmedData?.credited ? (
+                  <div className="w-16 h-16 rounded-full bg-[#00c076]/20 border-2 border-[#00c076] flex items-center justify-center mx-auto text-3xl text-[#00c076]">
+                    ✓
+                  </div>
+                ) : (
+                  <div className="w-16 h-16 rounded-full bg-amber-400/20 border-2 border-amber-400 flex items-center justify-center mx-auto text-2xl text-amber-400">
+                    ⏳
+                  </div>
+                )}
 
                 <div>
-                  <h2 className="text-xl font-black text-white">Payment Confirmed & Balance Credited!</h2>
+                  <h2 className="text-xl font-black text-white">
+                    {confirmedData?.credited ? 'Deposit verified and credited' : 'Payment submitted for verification'}
+                  </h2>
                   <p className="text-xs text-mute mt-1">
-                    Invoice <span className="text-white font-mono font-bold">#{activeDepositOrder?.orderRef}</span> has been confirmed on the banking network.
+                    {confirmedData?.credited ? (
+                      <>Invoice <span className="text-white font-mono font-bold">#{activeDepositOrder?.orderRef}</span> has been verified and credited to your Live balance.</>
+                    ) : (
+                      <>Invoice <span className="text-white font-mono font-bold">#{activeDepositOrder?.orderRef}</span> is awaiting verification. Your balance has not been credited yet — it will be credited after our team verifies the payment.</>
+                    )}
                   </p>
                 </div>
 
                 <div className="p-4 rounded-xl bg-base-950 border border-line text-left space-y-2.5 text-xs font-mono">
                   <div className="flex justify-between">
                     <span className="text-mute font-sans">Payment Method:</span>
-                    <span className="font-bold text-white capitalize">{confirmedData?.app || activeDepositOrder?.method?.replace(/_/g, ' ')}</span>
+                    <span className="font-bold text-white capitalize">{(confirmedData?.method || activeDepositOrder?.method || '').replace(/_/g, ' ')}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-mute font-sans">Amount Credited:</span>
-                    <span className="font-bold text-[#00c076] text-sm">
-                      +${Number(confirmedData?.amount ?? activeDepositOrder?.amount ?? 0).toFixed(2)} USD
-                      {confirmedData?.inrAmount && (
+                    <span className="text-mute font-sans">{confirmedData?.credited ? 'Amount Credited:' : 'Amount:'}</span>
+                    <span className={clsx('font-bold text-sm', confirmedData?.credited ? 'text-[#00c076]' : 'text-white')}>
+                      ${Number(confirmedData?.amount ?? activeDepositOrder?.amount ?? 0).toFixed(2)} USD
+                      {confirmedData?.inrAmount ? (
                         <span className="text-xs text-mute ml-1 font-normal font-sans">(₹{confirmedData.inrAmount.toLocaleString()} INR)</span>
-                      )}
+                      ) : null}
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-mute font-sans">Credit Account:</span>
+                    <span className="text-mute font-sans">Account:</span>
                     <span className="font-bold text-white">{selectedAccount?.accountNumber} ({selectedAccount?.accountType})</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-mute font-sans">Verified UTR / Ref:</span>
+                    <span className="text-mute font-sans">UTR / Reference:</span>
                     <span className="text-amber-400 font-bold truncate max-w-[220px]">
-                      {confirmedData?.utr || proofRef || 'AUTOCONFIRMED'}
+                      {confirmedData?.reference || proofRef || '—'}
                     </span>
                   </div>
-                  <div className="pt-2 border-t border-line flex justify-between items-center text-sm">
-                    <span className="text-white font-bold font-sans">Updated Live Balance:</span>
-                    <span className="font-black text-[#00c076] text-base">
-                      {fmtMoney(confirmedData?.balance ?? (wallet?.balance ? wallet.balance + (activeDepositOrder?.amount ?? 0) : selectedAccount?.balance ?? 0))}
+                  <div className="pt-2 border-t border-line flex justify-between items-center">
+                    <span className="text-mute font-sans">Status:</span>
+                    <span className={clsx('font-bold', confirmedData?.credited ? 'text-[#00c076]' : 'text-amber-400')}>
+                      {confirmedData?.credited ? 'COMPLETED' : 'PENDING VERIFICATION'}
                     </span>
                   </div>
                 </div>
 
+                {!confirmedData?.credited && (
+                  <p className="text-[11px] text-mute">
+                    You can leave this page — the deposit status is shown under Transfers &amp; Orders.
+                  </p>
+                )}
+
                 <div className="flex gap-2">
-                  <button
-                    onClick={() => nav('/trading')}
-                    className="flex-1 py-3 rounded-xl bg-[#00c076] hover:bg-[#00d684] text-base-950 font-black text-xs uppercase tracking-wider transition shadow-lg active:scale-98"
-                  >
-                    Trade Now on Live Account →
-                  </button>
+                  {confirmedData?.credited ? (
+                    <button
+                      onClick={() => nav('/trading')}
+                      className="flex-1 py-3 rounded-xl bg-[#00c076] hover:bg-[#00d684] text-base-950 font-black text-xs uppercase tracking-wider transition shadow-lg active:scale-98"
+                    >
+                      Trade Now on Live Account →
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setActiveTab('transfers')}
+                      className="flex-1 py-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-base-950 font-black text-xs uppercase tracking-wider transition shadow-lg active:scale-98"
+                    >
+                      View Deposit Status
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       setDepStep('FORM');
@@ -1693,10 +1548,14 @@ export function WalletPage() {
 
                 <div className="flex gap-2">
                   <button
-                    onClick={() => setDepStep('GATEWAY')}
-                    className="flex-1 py-3 rounded-xl bg-base-800 hover:bg-base-700 text-white font-bold text-xs uppercase tracking-wider transition border border-line"
+                    onClick={() => {
+                      setFailedData(null);
+                      createDepositOrder.mutate();
+                    }}
+                    disabled={createDepositOrder.isPending || !isLiveSelected || !isSelectedMethodAvailable}
+                    className="flex-1 py-3 rounded-xl bg-base-800 hover:bg-base-700 text-white font-bold text-xs uppercase tracking-wider transition border border-line disabled:opacity-50"
                   >
-                    Try Again with PhonePe / GPay
+                    {createDepositOrder.isPending ? 'Creating New Order…' : 'Try Again (New Order)'}
                   </button>
                   <button
                     onClick={() => {
@@ -1722,7 +1581,28 @@ export function WalletPage() {
       {/* ═════════════════════════════════════════════════════════════ */}
       {activeTab === 'withdraw' && (
         <div className="max-w-2xl mx-auto space-y-4">
-          {wdStep === 'FORM' && (
+          {!isLiveSelected && (
+            <div className="max-w-xl mx-auto">
+              <Card className="text-center py-8 px-6 space-y-3 border-amber-400/50">
+                <h2 className="text-lg font-black text-white">Withdrawals are only available on Live accounts</h2>
+                <p className="text-xs text-mute">
+                  The selected account is a practice (demo) account. Switch to your Live account to continue.
+                </p>
+                {liveAccount ? (
+                  <button
+                    onClick={() => setAccountId(liveAccount.id)}
+                    className="px-4 py-2.5 rounded-xl bg-[#00c076] hover:bg-[#00d684] text-base-950 font-black text-xs uppercase tracking-wider transition"
+                  >
+                    Switch to Live Account ({liveAccount.accountNumber})
+                  </button>
+                ) : (
+                  <p className="text-xs text-amber-300">No Live account found. Please contact support.</p>
+                )}
+              </Card>
+            </div>
+          )}
+
+          {wdStep === 'FORM' && isLiveSelected && (
             <Card>
               <SectionTitle title="Request Real Money Withdrawal" right={<span className="text-[11px] text-[#00c076] font-bold">0% Fee</span>} />
 
@@ -1881,7 +1761,7 @@ export function WalletPage() {
 
                 <button
                   onClick={() => setWdStep('REVIEW')}
-                  disabled={parsedWdAmt < 10 || parsedWdAmt > availableBalance}
+                  disabled={!isLiveSelected || parsedWdAmt < 10 || parsedWdAmt > availableBalance}
                   className="w-full py-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-base-950 font-black text-xs uppercase tracking-wider transition shadow-lg disabled:opacity-50"
                 >
                   Review & Request Withdrawal →
@@ -1891,7 +1771,7 @@ export function WalletPage() {
           )}
 
           {/* Review Step */}
-          {wdStep === 'REVIEW' && (
+          {wdStep === 'REVIEW' && isLiveSelected && (
             <Card className="border-amber-400/50">
               <SectionTitle title="Confirm Withdrawal Request" />
 
@@ -2010,7 +1890,7 @@ export function WalletPage() {
                 <table className="w-full text-xs">
                   <thead>
                     <tr>
-                      {['Amount', 'Method', 'Order / Proof Ref', 'Status', 'Date', 'Action'].map((h) => (
+                      {['Amount', 'Method', 'Order / Proof Ref', 'Status', 'Date'].map((h) => (
                         <th key={h} className="ax-th">{h}</th>
                       ))}
                     </tr>
@@ -2027,22 +1907,12 @@ export function WalletPage() {
                           <span className={clsx(
                             'ax-tag',
                             d.status === 'COMPLETED' ? 'bg-[#00c076]/20 text-[#00c076]' :
-                            d.status === 'PENDING' ? 'bg-amber-400/20 text-amber-400' : 'bg-red-500/20 text-red-400'
+                            d.status === 'PENDING' || d.status === 'PENDING_VERIFICATION' ? 'bg-amber-400/20 text-amber-400' : 'bg-red-500/20 text-red-400'
                           )}>
-                            {d.status}
+                            {d.status === 'PENDING_VERIFICATION' ? 'AWAITING VERIFICATION' : d.status}
                           </span>
                         </td>
                         <td className="ax-td text-mute">{fmtTime(d.createdAt)}</td>
-                        <td className="ax-td">
-                          {d.status === 'PENDING' && (
-                            <button
-                              onClick={() => fastTrackConfirm.mutate(d.id)}
-                              className="px-2 py-1 rounded bg-[#00c076]/20 hover:bg-[#00c076] text-[#00c076] hover:text-base-950 text-[10px] font-extrabold transition"
-                            >
-                              Fast Confirm
-                            </button>
-                          )}
-                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -2142,121 +2012,6 @@ export function WalletPage() {
         </Card>
       )}
 
-      {/* ── PHONEPE SECURE WEB GATEWAY MODAL ───────────────────────── */}
-      {showPhonePeGatewayModal && activeDepositOrder && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-base-950 border border-purple-500/40 rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            {/* Modal Header */}
-            <div className="bg-gradient-to-r from-[#5f259f] to-[#421772] px-6 py-4 flex items-center justify-between text-white">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center text-[#5f259f] font-black text-xl shadow">
-                  पे
-                </div>
-                <div>
-                  <h3 className="font-black text-base tracking-tight leading-none">PhonePe Payment Gateway</h3>
-                  <span className="text-[10px] text-purple-200 tracking-wider uppercase font-semibold">
-                    NPCI Verified Merchant
-                  </span>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowPhonePeGatewayModal(false);
-                  setPhonePePin('');
-                  setPhonePePinError(null);
-                }}
-                className="w-8 h-8 rounded-lg bg-black/20 hover:bg-black/40 flex items-center justify-center text-white text-sm font-bold transition"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Modal Body */}
-            <div className="p-6 space-y-4">
-              {/* Payment Summary */}
-              <div className="p-4 rounded-xl bg-base-900 border border-line space-y-2">
-                <div className="flex justify-between items-center text-xs">
-                  <span className="text-mute">Merchant:</span>
-                  <span className="font-bold text-white">{activeDepositOrder.gatewayData.payeeName}</span>
-                </div>
-                <div className="flex justify-between items-center text-xs">
-                  <span className="text-mute">Order Reference:</span>
-                  <span className="font-mono text-purple-300 font-bold">#{activeDepositOrder.orderRef}</span>
-                </div>
-                <div className="pt-2 border-t border-line flex justify-between items-center">
-                  <span className="text-xs text-mute font-bold">Amount to Pay:</span>
-                  <span className="text-xl font-black font-mono text-emerald-400">
-                    ₹{activeDepositOrder.gatewayData.amountInr?.toLocaleString()} INR
-                  </span>
-                </div>
-              </div>
-
-              {/* UPI PIN Entry */}
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-300 block">
-                  Enter 4 or 6-Digit UPI PIN to Authorize:
-                </label>
-                <div className="relative">
-                  <input
-                    type="password"
-                    maxLength={6}
-                    placeholder="• • • • • •"
-                    value={phonePePin}
-                    onChange={(e) => {
-                      setPhonePePin(e.target.value.replace(/\D/g, ''));
-                      setPhonePePinError(null);
-                    }}
-                    className="ax-input text-center !font-mono text-2xl !tracking-[0.4em] !bg-base-900 font-bold text-white"
-                  />
-                </div>
-                {phonePePinError && (
-                  <p className="text-xs text-[#ff5447] font-bold">{phonePePinError}</p>
-                )}
-                <p className="text-[10px] text-mute text-center">
-                  🔒 PIN is securely transmitted via PhonePe end-to-end 256-bit banking encryption.
-                </p>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="space-y-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => phonePeAuthorize.mutate()}
-                  disabled={phonePeAuthorize.isPending || phonePePin.length < 4}
-                  className="w-full py-3.5 px-4 rounded-xl bg-[#5f259f] hover:bg-[#6f2fb8] disabled:opacity-40 text-white font-black text-sm uppercase tracking-wider transition shadow-[0_0_20px_rgba(95,37,159,0.3)] active:scale-98 flex items-center justify-center gap-2"
-                >
-                  {phonePeAuthorize.isPending ? (
-                    <>
-                      <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                      </svg>
-                      <span>Contacting Bank Server…</span>
-                    </>
-                  ) : (
-                    <span>Confirm Payment ₹{activeDepositOrder.gatewayData.amountInr?.toLocaleString()} →</span>
-                  )}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowPhonePeGatewayModal(false);
-                    setPhonePePin('');
-                    setPhonePePinError(null);
-                    failPayment.mutate('Payment cancelled in PhonePe Gateway');
-                  }}
-                  disabled={failPayment.isPending || phonePeAuthorize.isPending}
-                  className="w-full py-2.5 px-4 rounded-xl bg-transparent hover:bg-rose-500/10 text-rose-400 font-bold text-xs transition"
-                >
-                  Cancel and Return to Cashier
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

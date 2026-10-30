@@ -18,12 +18,21 @@ function useNow(ms = 250) {
 export function DirBadge({ d }: { d: 'UP' | 'DOWN' }) {
   return <span className={d === 'UP' ? 'ax-side-buy' : 'ax-side-sell'}>{d === 'UP' ? '▲ UP' : '▼ DOWN'}</span>;
 }
-export function ResultBadge({ s }: { s: OptionTrade['status'] }) {
+export function ResultBadge({ s, refund }: { s: OptionTrade['status']; refund?: boolean }) {
   return (
     <span className={clsx('text-[10px] font-bold px-1.5 py-[3px] rounded', s === 'WON' && 'bg-up/15 text-up', s === 'LOST' && 'bg-down/15 text-down', s === 'TIE' && 'bg-white/[0.07] text-fog', s === 'OPEN' && 'bg-warn/15 text-warn')}>
-      {s === 'OPEN' ? 'RUNNING' : s}
+      {s === 'OPEN' ? 'RUNNING' : refund ? 'REFUNDED' : s}
     </span>
   );
+}
+
+const SOURCE_LABEL = { QUOTE: 'live quote at expiry', EXCHANGE: 'exchange trade record', REFUND: 'no price at expiry — stake refunded' } as const;
+
+/** Settlement proof shown on hover: the exact quote time and where the closing price came from. */
+export function settleNote(t: OptionTrade): string | undefined {
+  if (t.status === 'OPEN' || !t.settleSource) return undefined;
+  const at = t.closeQuoteAt ? new Date(t.closeQuoteAt).toISOString().replace('T', ' ').slice(0, 23) + ' UTC' : '—';
+  return `Entry ${t.entryPrice} → close ${t.closePrice ?? '—'}\nClosing quote: ${at}\nSource: ${SOURCE_LABEL[t.settleSource]}`;
 }
 
 /** Ring countdown, Quotex-style. */
@@ -195,14 +204,14 @@ export function TradeHistoryTable({ pageSize = 30, compact = false }: { pageSize
         <thead><tr>{['Asset', 'Direction', 'Investment', 'Entry', 'Close', 'Time', 'Result', 'Profit', compact ? '' : 'Settled'].map((h) => <th key={h} className={clsx('ax-th', h === 'Profit' && 'text-right')}>{h}</th>)}</tr></thead>
         <tbody>
           {data.items.map((t) => (
-            <tr key={t.id} className="ax-row">
+            <tr key={t.id} className="ax-row" title={settleNote(t)}>
               <td className="ax-td font-bold">{t.symbol}</td>
               <td className="ax-td"><DirBadge d={t.direction} /></td>
               <td className="ax-td ax-num">{fmtMoney(t.stake)}</td>
               <td className="ax-td ax-num text-fog">{fmtPrice(t.entryPrice)}</td>
               <td className="ax-td ax-num text-fog">{t.closePrice != null ? fmtPrice(t.closePrice) : '—'}</td>
               <td className="ax-td ax-num text-mute">{fmtDur(t.durationSec)}</td>
-              <td className="ax-td"><ResultBadge s={t.status} /></td>
+              <td className="ax-td"><ResultBadge s={t.status} refund={t.settleSource === 'REFUND'} /></td>
               <td className={clsx('ax-td ax-num font-bold text-right', (t.profit ?? 0) > 0 ? 'text-up' : (t.profit ?? 0) < 0 ? 'text-down' : 'text-fog')}>{(t.profit ?? 0) > 0 ? '+' : ''}{fmtMoney(t.profit ?? 0)}</td>
               {!compact && <td className="ax-td text-mute">{t.settledAt ? fmtTime(t.settledAt) : '—'}</td>}
             </tr>
@@ -244,7 +253,7 @@ export function CompactTradeHistoryList({ accountId }: { accountId?: string | nu
         const profit = Number(t.profit ?? 0);
 
         return (
-          <div key={t.id} className="p-2.5 hover:bg-white/[0.02] transition rounded-lg flex items-center justify-between gap-2">
+          <div key={t.id} title={settleNote(t)} className="p-2.5 hover:bg-white/[0.02] transition rounded-lg flex items-center justify-between gap-2">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
                 <span className="text-xs leading-none">{meta.flag1}{meta.flag2}</span>
@@ -301,7 +310,7 @@ export function ClosedTradesList({ accountId }: { accountId?: string | null }) {
       {data.items.map((t) => {
         const p = t.profit ?? 0;
         return (
-          <div key={t.id} className="px-3 py-2">
+          <div key={t.id} title={settleNote(t)} className="px-3 py-2">
             <div className="flex items-center gap-1.5">
               <span className={clsx('w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shrink-0', t.direction === 'UP' ? 'bg-up/15 text-up' : 'bg-down/15 text-down')}>{t.direction === 'UP' ? '↑' : '↓'}</span>
               <span className="text-xs font-bold">{t.symbol}</span>
@@ -310,7 +319,7 @@ export function ClosedTradesList({ accountId }: { accountId?: string | null }) {
             </div>
             <div className="flex items-center text-[10px] text-mute ax-num mt-1 pl-[26px]">
               <span>{fmtPrice(t.entryPrice)} → {t.closePrice != null ? fmtPrice(t.closePrice) : '—'}</span>
-              <span className="ml-auto">{fmtMoney(t.stake)} · {t.settledAt ? fmtTime(t.settledAt) : '—'}</span>
+              <span className="ml-auto">{t.settleSource === 'REFUND' ? <span className="text-warn font-bold">Refunded · </span> : null}{fmtMoney(t.stake)} · {t.settledAt ? fmtTime(t.settledAt) : '—'}</span>
             </div>
           </div>
         );

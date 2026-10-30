@@ -11,24 +11,36 @@ import { useSettingsStore } from '../../stores/settingsStore';
 import { OpenTradesList, PendingTradesList, ClosedTradesList } from '../../components/trading/TradesPanel';
 import { useIsMobile } from '../../hooks/useMediaQuery';
 import { getAssetMeta } from '../../lib/assetMeta';
-import type { OptionTrade } from '../../lib/options';
+import { effectivePayoutPct, type OptionTrade, type OptionsConfig } from '../../lib/options';
 import { clsx } from 'clsx';
 
 interface AssetRow { symbol: string; name: string; category: string; enabled: boolean; payoutPct?: number }
-interface OptCfg { assets: Array<{ symbol: string; payoutPct: number; enabled: boolean }> }
+/** Effective payout % and OTC flag per symbol, for the ticket's current trade length. */
+function usePayoutInfo() {
+  const { data: cfg } = useQuery({ queryKey: ['options-config'], queryFn: () => get<OptionsConfig>('/api/v1/options/config'), refetchInterval: 30000 });
+  const durationSec = useTerminal((s) => s.pendingDurationSec);
+  return (symbol: string, basePct?: number) => {
+    const a = cfg?.assets.find((x) => x.symbol === symbol);
+    const otc = a?.otc ?? true;
+    return { otc, pct: effectivePayoutPct(basePct ?? a?.payoutPct ?? getAssetMeta(symbol).defaultPayout ?? 80, durationSec, otc, cfg?.payoutRules) };
+  };
+}
+
+const OtcBadge = () => (
+  <span className="text-[9px] font-black text-amber-400 bg-amber-400/15 border border-amber-400/30 px-1 py-0.2 rounded leading-none">OTC</span>
+);
 
 /** Quotex Top Asset Tabs Bar */
 function AssetTabs({ onOpenSelector }: { onOpenSelector: () => void }) {
   const { symbol, setSymbol, openTabs, closeTab } = useTerminal();
-  const { data: cfg } = useQuery({ queryKey: ['options-config'], queryFn: () => get<OptCfg>('/api/v1/options/config'), refetchInterval: 30000 });
+  const payoutInfo = usePayoutInfo();
 
   return (
     <div className="flex items-center h-10 bg-[#161a25] border-b border-white/10 px-2 overflow-x-auto select-none shrink-0 no-scrollbar">
       <div className="flex items-center gap-1.5 min-w-max">
         {openTabs.map((sym) => {
           const meta = getAssetMeta(sym);
-          const cfgAsset = cfg?.assets.find((a) => a.symbol === sym);
-          const payout = cfgAsset?.payoutPct ?? meta.defaultPayout ?? 80;
+          const { pct: payout, otc } = payoutInfo(sym);
           const isActive = sym === symbol;
 
           return (
@@ -45,9 +57,7 @@ function AssetTabs({ onOpenSelector }: { onOpenSelector: () => void }) {
               <div className="flex items-center gap-1.5">
                 <span className="text-sm leading-none">{meta.flag1}{meta.flag2}</span>
                 <span>{sym}</span>
-                <span className="text-[9px] font-black text-amber-400 bg-amber-400/15 border border-amber-400/30 px-1 py-0.2 rounded leading-none">
-                  OTC
-                </span>
+                {otc && <OtcBadge />}
               </div>
               <span className="text-[10px] font-extrabold text-[#00c076] bg-[#00c076]/15 px-1.5 py-0.5 rounded leading-none font-mono">
                 {payout}%
@@ -87,6 +97,7 @@ function AssetSelectorModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
   const [q, setQ] = useState('');
   const [cat, setCat] = useState<'ALL' | 'CURRENCIES' | 'CRYPTO' | 'COMMODITIES'>('ALL');
 
+  const payoutInfo = usePayoutInfo();
   const { data } = useQuery({
     queryKey: ['assets'],
     queryFn: () => get<{ assets: AssetRow[] }>('/api/v1/assets'),
@@ -106,9 +117,9 @@ function AssetSelectorModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
       return true;
     })
     .sort((a, b) => {
-      const pA = a.payoutPct ?? getAssetMeta(a.symbol).defaultPayout ?? 80;
-      const pB = b.payoutPct ?? getAssetMeta(b.symbol).defaultPayout ?? 80;
-      return pB - pA; // Highest payout first (Quotex style)
+      const pA = payoutInfo(a.symbol, a.payoutPct).pct;
+      const pB = payoutInfo(b.symbol, b.payoutPct).pct;
+      return pB - pA; // highest payout first
     });
 
   if (!isOpen) return null;
@@ -155,7 +166,7 @@ function AssetSelectorModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
         <div className="max-h-[340px] overflow-y-auto space-y-1 pr-1">
           {filtered.map((a) => {
             const meta = getAssetMeta(a.symbol);
-            const payout = a.payoutPct ?? meta.defaultPayout ?? 80;
+            const { pct: payout, otc } = payoutInfo(a.symbol, a.payoutPct);
             return (
               <div
                 key={a.symbol}
@@ -170,9 +181,7 @@ function AssetSelectorModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
                   <div>
                     <div className="flex items-center gap-1.5 text-xs font-extrabold text-white">
                       <span>{a.symbol}</span>
-                      <span className="text-[9px] font-black text-amber-400 bg-amber-400/15 border border-amber-400/30 px-1 py-0.2 rounded">
-                        OTC
-                      </span>
+                      {otc && <OtcBadge />}
                     </div>
                     <div className="text-[10px] text-slate-400">{meta.name} · Binary Option</div>
                   </div>

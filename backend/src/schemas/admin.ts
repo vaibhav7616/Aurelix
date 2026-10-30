@@ -17,8 +17,9 @@ export const riskRuleSchema = z.object({
   minOrderAmount: z.number().positive(),
   maxPositionAmount: z.number().positive(),
   maxOpenPositions: z.number().int().positive(),
-  maxDailyLoss: z.number().positive(),
-  maxTotalLoss: z.number().positive(),
+  maxDailyLoss: z.number().min(0),
+  maxTotalLoss: z.number().min(0),
+  maxAssetExposure: z.number().min(0).default(0),
   tradingEnabled: z.boolean(),
 });
 export const reviewWithdrawalSchema = z.object({

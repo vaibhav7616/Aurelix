@@ -10,6 +10,7 @@
 //   cancel / expiry (validUntil) / failed execution: the reserved stake is released.
 import { prisma } from '../config/database';
 import { Err } from '../utils/errors';
+import { env } from '../config/env';
 import { logger } from '../utils/logger';
 import { Tick } from '../market/MarketDataProvider';
 import { getProvider } from '../services/marketService';
@@ -116,6 +117,7 @@ export async function createPending(input: {
 
   const triggerAbove = input.targetPrice > tick.mid;
   const created = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Account" WHERE id = ${account.id} FOR UPDATE`; // serialize with trades/withdrawals
     const fresh = await tx.account.findUniqueOrThrow({ where: { id: account.id } });
     // reserve: lockedBalance += stake, only if the free balance covers it
     const reserved = await tx.account.updateMany({
@@ -187,6 +189,9 @@ export async function expirePending(now = new Date()): Promise<number> {
 export function onPendingTick(t: Tick): void {
   const list = book.get(t.symbol);
   if (!list?.length) return;
+  // a frozen quote is not a price — it must not trigger (or fail) anyone's pending trade
+  const age = getProvider().quoteAgeMs?.(t.symbol);
+  if (age == null || age > env.MAX_QUOTE_AGE_MS) return;
   for (const e of list) {
     if (inFlight.has(e.id)) continue;
     const hit = e.triggerAbove ? t.mid >= e.targetPrice : t.mid <= e.targetPrice;

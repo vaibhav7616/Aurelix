@@ -141,13 +141,16 @@ export function AdminDeposits() {
   const push = useUI((s) => s.push);
   const { data } = useQuery({
     queryKey: ['admin-deposits'],
-    queryFn: () => get<Array<{ id: string; amount: number; currency: string; provider: string; providerRef: string | null; status: string; createdAt: string; user: { email: string } }>>('/api/v1/admin/deposits'),
+    queryFn: () => get<Array<{ id: string; amount: number; currency: string; provider: string; providerRef: string | null; proofRef: string | null; status: string; createdAt: string; user: { email: string } }>>('/api/v1/admin/deposits'),
   });
 
   const handleApprove = async (id: string) => {
+    const d = data?.find((x) => x.id === id);
+    // credits real money: only after checking the bank/wallet statement for this exact payment
+    if (!window.confirm(`Credit ${d ? fmtMoney(d.amount) : 'this deposit'} to ${d?.user?.email ?? 'the user'}?\n\nOnly approve after you have found this payment (${d?.proofRef ?? d?.providerRef ?? 'no reference'}) in the bank / wallet statement.`)) return;
     try {
       await post(`/api/v1/admin/deposits/${id}/approve`);
-      push('ok', 'Deposit approved and balance credited to user!');
+      push('ok', 'Deposit approved — balance credited');
       qc.invalidateQueries({ queryKey: ['admin-deposits'] });
     } catch (e) {
       push('err', apiError(e));
@@ -170,13 +173,14 @@ export function AdminDeposits() {
       <div className="ax-panel mt-3 overflow-hidden">
         {!data?.length ? <Empty title="No deposits" /> : (
           <table className="w-full">
-            <thead><tr>{['User', 'Amount', 'Method', 'Reference / Proof', 'Status', 'Date', 'Action'].map((h) => <th key={h} className="ax-th">{h}</th>)}</tr></thead>
+            <thead><tr>{['User', 'Amount', 'Method', 'Order ref', 'Payment proof (UTR / tx hash)', 'Status', 'Date', 'Action'].map((h) => <th key={h} className="ax-th">{h}</th>)}</tr></thead>
             <tbody>{data.map((d) => (
               <tr key={d.id} className="ax-row">
                 <td className="ax-td text-fog">{d.user?.email}</td>
                 <td className="ax-td ax-num font-bold text-[#00c076]">{fmtMoney(d.amount)} <span className="text-mute text-[10px]">{d.currency}</span></td>
                 <td className="ax-td"><span className="ax-tag">{d.provider.replace(/_/g, ' ')}</span></td>
-                <td className="ax-td font-mono text-[11px] text-slate-300 max-w-[220px] truncate">{d.providerRef ?? '—'}</td>
+                <td className="ax-td font-mono text-[11px] text-slate-300 max-w-[180px] truncate" title={d.providerRef ?? ''}>{d.providerRef ?? '—'}</td>
+                <td className="ax-td font-mono text-[11px] max-w-[220px] truncate" title={d.proofRef ?? ''}>{d.proofRef ? <span className="text-ink1 font-bold">{d.proofRef}</span> : <span className="text-mute">not submitted</span>}</td>
                 <td className="ax-td"><span className="ax-tag">{d.status}</span></td>
                 <td className="ax-td text-mute">{fmtTime(d.createdAt)}</td>
                 <td className="ax-td">
@@ -259,6 +263,7 @@ export function AdminRisk() {
       maxOrderAmount: parseFloat(v('maxOrderAmount')), minOrderAmount: parseFloat(v('minOrderAmount')),
       maxPositionAmount: parseFloat(v('maxPositionAmount')), maxOpenPositions: parseInt(v('maxOpenPositions'), 10),
       maxDailyLoss: parseFloat(v('maxDailyLoss')), maxTotalLoss: parseFloat(v('maxTotalLoss')),
+      maxAssetExposure: parseFloat(v('maxAssetExposure')) || 0,
       tradingEnabled: v('tradingEnabled') === 'true',
     }),
     onSuccess: () => { push('ok', 'Risk rules updated — enforced on next order'); setErr(null); qc.invalidateQueries({ queryKey: ['admin-risk'] }); },
@@ -270,7 +275,7 @@ export function AdminRisk() {
       <h1 className="text-lg font-bold tracking-tight">Risk rules</h1>
       <p className="text-[11px] text-mute">Stored in PostgreSQL · evaluated on every order · changes apply immediately.</p>
       <Card className="mt-3 space-y-2.5">
-        {[['maxOrderAmount', 'Max order amount (USD)'], ['minOrderAmount', 'Min order amount (USD)'], ['maxPositionAmount', 'Max position amount (USD)'], ['maxOpenPositions', 'Max open positions'], ['maxDailyLoss', 'Max daily loss (USD)'], ['maxTotalLoss', 'Max total loss (USD)']].map(([k, l]) => (
+        {[['maxOrderAmount', 'Max order amount (USD)'], ['minOrderAmount', 'Min order amount (USD)'], ['maxPositionAmount', 'Max position amount (USD)'], ['maxOpenPositions', 'Max open positions'], ['maxDailyLoss', 'Max daily loss per account (USD · 0 = no limit)'], ['maxTotalLoss', 'Max total loss per account (USD · 0 = no limit)'], ['maxAssetExposure', 'Max net exposure per asset, live (USD · 0 = off)']].map(([k, l]) => (
           <div key={k}><label className="ax-label">{l}</label><input className="ax-input ax-num" value={v(k)} onChange={set(k)} /></div>
         ))}
         <label className={`flex items-center gap-2.5 text-[13px] font-semibold rounded-md border px-3 py-2.5 cursor-pointer ${v('tradingEnabled') === 'true' ? 'border-up/40 bg-updim/40' : 'border-down/40 bg-downdim/40'}`}>

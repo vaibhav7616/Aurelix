@@ -8,6 +8,7 @@ import { audit } from '../services/auditService';
 import { netPnl } from '../services/pnlService';
 import { getProvider } from '../services/marketService';
 import { emitToUser } from '../websocket/socketServer';
+import { utcDayStart } from '../utils/time';
 
 const r = Router();
 r.use(requireAuth);
@@ -128,7 +129,7 @@ r.get('/:id/stats', ah(async (req: AuthedRequest, res) => {
     prisma.binaryOption.findMany({ where: { accountId: acct.id, status: 'OPEN' }, select: { stake: true } }),
     prisma.position.findMany({ where: { accountId: acct.id, status: 'OPEN' }, select: { unrealizedPnl: true } }),
   ]);
-  const todayStart = new Date(new Date().setHours(0, 0, 0, 0));
+  const todayStart = utcDayStart();
   const realized = settled.map((t) => ({ v: Number(t.profit ?? 0), d: t.settledAt ?? new Date(0), s: t.status }));
   const totalPnl = realized.reduce((a, b) => a + b.v, 0);
   const todayPnl = realized.filter((t) => t.d >= todayStart).reduce((a, b) => a + b.v, 0);

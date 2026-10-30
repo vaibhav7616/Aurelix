@@ -11,6 +11,8 @@ import { audit } from '../services/auditService';
 import { notify } from '../services/notificationService';
 import { emitToUser } from '../websocket/socketServer';
 import { parsePage, pageMeta } from '../utils/pagination';
+import { Err } from '../utils/errors';
+import { PAYOUT_RULES_KEY } from '../trading/payout';
 
 const r = Router();
 r.use(requireAuth, requireAdmin);
@@ -91,7 +93,7 @@ r.get('/assets', ah(async (_req, res) => {
 }));
 r.put('/assets', validateBody(assetUpsertSchema), ah(async (req: AuthedRequest, res) => {
   const b = req.body as { symbol: string; name: string; category: 'CRYPTO' | 'FOREX' | 'METALS' | 'INDICES'; enabled?: boolean; basePrice?: number; volatility?: number; spread?: number; feeBps?: number; minOrder?: number; maxOrder?: number; payoutPct?: number };
-  const row = await prisma.asset.upsert({ where: { symbol: b.symbol }, update: { ...b }, create: { symbol: b.symbol, name: b.name, category: b.category, enabled: b.enabled ?? true, basePrice: b.basePrice ?? 100, volatility: b.volatility ?? 0.002, spread: b.spread ?? 0.0004, feeBps: b.feeBps ?? 10, minOrder: b.minOrder ?? 1, maxOrder: b.maxOrder ?? 100000 } });
+  const row = await prisma.asset.upsert({ where: { symbol: b.symbol }, update: { ...b }, create: { symbol: b.symbol, name: b.name, category: b.category, enabled: b.enabled ?? true, basePrice: b.basePrice ?? 100, volatility: b.volatility ?? 0.002, spread: b.spread ?? 0.0004, feeBps: b.feeBps ?? 10, minOrder: b.minOrder ?? 1, maxOrder: b.maxOrder ?? 100000, payoutPct: b.payoutPct ?? 80 } });
   demoProvider()?.setEnabled(row.symbol, row.enabled);
   await demoProvider()?.reloadAssets().catch(() => undefined);
   await audit({ actorId: req.userId, action: 'ASSET_UPSERT', entityType: 'Asset', entityId: row.id, metadata: { symbol: row.symbol } });
@@ -103,7 +105,7 @@ r.get('/risk', ah(async (_req, res) => {
   res.json({ success: true, data: await getRiskRules(), error: null });
 }));
 r.put('/risk', validateBody(riskRuleSchema), ah(async (req: AuthedRequest, res) => {
-  const b = req.body as { maxOrderAmount: number; minOrderAmount: number; maxPositionAmount: number; maxOpenPositions: number; maxDailyLoss: number; maxTotalLoss: number; tradingEnabled: boolean };
+  const b = req.body as { maxOrderAmount: number; minOrderAmount: number; maxPositionAmount: number; maxOpenPositions: number; maxDailyLoss: number; maxTotalLoss: number; maxAssetExposure: number; tradingEnabled: boolean };
   await prisma.riskRule.upsert({ where: { key: 'global' }, update: { ...b }, create: { key: 'global', ...b } });
   await audit({ actorId: req.userId, action: 'RISK_UPDATE', entityType: 'RiskRule', entityId: 'global', metadata: b as Record<string, unknown> });
   res.json({ success: true, data: await getRiskRules(), error: null });
@@ -120,25 +122,30 @@ r.post('/withdrawals/:id/review', validateBody(reviewWithdrawalSchema), ah(async
   const w = await prisma.withdrawal.findUnique({ where: { id: req.params.id } });
   if (!w) { res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'Withdrawal not found' } }); return; }
   const next = action === 'approve' ? 'APPROVED' : action === 'reject' ? 'REJECTED' : action === 'process' ? 'PROCESSING' : 'COMPLETED';
-  await prisma.$transaction(async (tx) => {
-    const acct = await tx.account.findUnique({ where: { id: w.accountId } });
-    if (!acct) throw new Error('Account missing');
-    if (next === 'REJECTED' && w.status !== 'REJECTED' && w.status !== 'COMPLETED') {
-      // release lock
-      await tx.account.update({ where: { id: acct.id }, data: { lockedBalance: Number(acct.lockedBalance) - Number(w.amount) } });
+  // allowed transitions; COMPLETED and REJECTED are final
+  const from: Record<typeof next, Array<'REQUESTED' | 'UNDER_REVIEW' | 'APPROVED' | 'PROCESSING'>> = {
+    APPROVED: ['REQUESTED', 'UNDER_REVIEW'],
+    PROCESSING: ['REQUESTED', 'UNDER_REVIEW', 'APPROVED'],
+    COMPLETED: ['REQUESTED', 'UNDER_REVIEW', 'APPROVED', 'PROCESSING'],
+    REJECTED: ['REQUESTED', 'UNDER_REVIEW', 'APPROVED', 'PROCESSING'],
+  };
+  const ok = await prisma.$transaction(async (tx) => {
+    const claimed = await tx.withdrawal.updateMany({
+      where: { id: w.id, status: { in: from[next] } },
+      data: { status: next, reviewedBy: req.userId, reviewNote: note },
+    });
+    if (!claimed.count) return false;
+    const amount = Number(w.amount);
+    if (next === 'REJECTED') {
+      await tx.account.update({ where: { id: w.accountId }, data: { lockedBalance: { decrement: amount } } });
     }
-    if (next === 'COMPLETED' && w.status !== 'COMPLETED') {
-      const locked = Number(acct.lockedBalance) - Number(w.amount);
-      const bal = Number(acct.balance) - Number(w.amount);
-      await tx.account.update({ where: { id: acct.id }, data: { lockedBalance: Math.max(0, locked), balance: bal } });
-      await tx.walletTransaction.create({ data: { accountId: acct.id, type: 'WITHDRAWAL', amount: -Number(w.amount), balanceAfter: bal, reference: w.id, memo: 'Withdrawal completed (demo)' } });
+    if (next === 'COMPLETED') {
+      const acct = await tx.account.update({ where: { id: w.accountId }, data: { lockedBalance: { decrement: amount }, balance: { decrement: amount } } });
+      await tx.walletTransaction.create({ data: { accountId: acct.id, type: 'WITHDRAWAL', amount: -amount, balanceAfter: Number(acct.balance), reference: w.id, memo: `Withdrawal paid out (${w.method})` } });
     }
-    if ((next === 'APPROVED' || next === 'PROCESSING') && w.status === 'REQUESTED') {
-      await tx.withdrawal.update({ where: { id: w.id }, data: { status: next as never, reviewedBy: req.userId, reviewNote: note } });
-    } else {
-      await tx.withdrawal.update({ where: { id: w.id }, data: { status: next as never, reviewedBy: req.userId, reviewNote: note } });
-    }
+    return true;
   });
+  if (!ok) { res.status(409).json({ success: false, data: null, error: { code: 'INVALID_STATUS', message: `A ${w.status.toLowerCase()} withdrawal cannot be ${next.toLowerCase()}` } }); return; }
   await notify({ userId: w.userId, type: 'WITHDRAWAL', title: `Withdrawal ${next.toLowerCase()}`, message: `${w.amount} — ${note ?? next}` });
   await audit({ actorId: req.userId, action: `WITHDRAWAL_${next}`, entityType: 'Withdrawal', entityId: w.id, metadata: { note } });
   const updated = await prisma.withdrawal.findUnique({ where: { id: w.id } });
@@ -217,16 +224,18 @@ r.post('/deposits/:id/approve', ah(async (req: AuthedRequest, res) => {
   if (dep.status === 'COMPLETED') { res.json({ success: true, data: dep, error: null }); return; }
   const amount = Number(dep.amount);
   const out = await prisma.$transaction(async (tx) => {
-    const acct = await tx.account.findUnique({ where: { id: dep.accountId } });
-    if (!acct) throw new Error('Account missing');
-    const newBal = Number(acct.balance) + amount;
-    await tx.account.update({ where: { id: acct.id }, data: { balance: newBal } });
+    // claim PENDING → COMPLETED once: a double click or two admins can never credit twice
+    const claimed = await tx.deposit.updateMany({ where: { id: dep.id, status: 'PENDING' }, data: { status: 'COMPLETED' } });
+    if (!claimed.count) return null;
+    const acct = await tx.account.update({ where: { id: dep.accountId }, data: { balance: { increment: amount } } });
+    const newBal = Number(acct.balance);
     await tx.walletTransaction.create({
-      data: { accountId: acct.id, type: 'DEPOSIT', amount, balanceAfter: newBal, reference: dep.providerRef, memo: `Deposit approved by admin (${dep.provider})` },
+      data: { accountId: acct.id, type: 'DEPOSIT', amount, balanceAfter: newBal, reference: dep.proofRef ?? dep.providerRef, memo: `Deposit verified by admin (${dep.provider}${dep.proofRef ? `, ref ${dep.proofRef}` : ''})` },
     });
-    const completed = await tx.deposit.update({ where: { id: dep.id }, data: { status: 'COMPLETED' } });
+    const completed = await tx.deposit.findUniqueOrThrow({ where: { id: dep.id } });
     return { newBal, completed };
   });
+  if (!out) { res.status(409).json({ success: false, data: null, error: { code: 'INVALID_STATUS', message: 'Only pending deposits can be approved' } }); return; }
   emitToUser(dep.userId, 'balance:updated', { accountId: dep.accountId, balance: out.newBal });
   await notify({ userId: dep.userId, type: 'DEPOSIT', title: 'Deposit approved!', message: `+$${amount.toFixed(2)} USD credited to your account.` });
   await audit({ actorId: req.userId, action: 'DEPOSIT_APPROVE', entityType: 'Deposit', entityId: dep.id, metadata: { amount } });
@@ -237,7 +246,9 @@ r.post('/deposits/:id/reject', ah(async (req: AuthedRequest, res) => {
   const { reason } = (req.body ?? {}) as { reason?: string };
   const dep = await prisma.deposit.findUnique({ where: { id: req.params.id } });
   if (!dep) { res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'Deposit not found' } }); return; }
-  const rejected = await prisma.deposit.update({ where: { id: dep.id }, data: { status: 'FAILED' } });
+  const n = await prisma.deposit.updateMany({ where: { id: dep.id, status: 'PENDING' }, data: { status: 'FAILED' } });
+  if (!n.count) { res.status(409).json({ success: false, data: null, error: { code: 'INVALID_STATUS', message: 'Only pending deposits can be rejected' } }); return; }
+  const rejected = await prisma.deposit.findUniqueOrThrow({ where: { id: dep.id } });
   await notify({ userId: dep.userId, type: 'DEPOSIT', title: 'Deposit rejected', message: reason ?? 'Deposit could not be verified' });
   await audit({ actorId: req.userId, action: 'DEPOSIT_REJECT', entityType: 'Deposit', entityId: dep.id, metadata: { reason } });
   res.json({ success: true, data: rejected, error: null });
@@ -285,6 +296,12 @@ r.get('/settings', ah(async (_req, res) => {
 }));
 r.put('/settings', ah(async (req: AuthedRequest, res) => {
   const body = (req.body ?? {}) as Record<string, string>;
+  if (Object.keys(body).some((k) => k.startsWith('deposit.'))) {
+    throw Err.validation('Deposit payment details are set in the server .env (DEPOSIT_* variables), not in the database');
+  }
+  if (typeof body[PAYOUT_RULES_KEY] === 'string') {
+    try { JSON.parse(body[PAYOUT_RULES_KEY]); } catch { throw Err.validation(`${PAYOUT_RULES_KEY} must be valid JSON, e.g. {"duration":[{"maxSec":29,"adj":-5}],"otcAdj":-3}`); }
+  }
   for (const [k, v] of Object.entries(body).slice(0, 50)) {
     if (typeof v !== 'string') continue;
     await prisma.systemSetting.upsert({ where: { key: k }, update: { value: v }, create: { key: k, value: v } });

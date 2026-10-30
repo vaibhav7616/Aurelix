@@ -75,7 +75,7 @@ export function SettingsModal() {
                 <div className="text-xs font-black text-white flex items-center gap-1.5">
                   <span>⚡ 1-Click Fast Trading</span>
                   <span className="text-[9px] bg-emerald-500/20 text-emerald-400 font-extrabold px-1.5 py-0.2 rounded">
-                    QUOTEX SPEED
+                    INSTANT
                   </span>
                 </div>
                 <div className="text-[11px] text-slate-400 mt-0.5">

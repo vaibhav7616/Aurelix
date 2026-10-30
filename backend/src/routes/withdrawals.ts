@@ -40,23 +40,19 @@ r.post('/', validateBody(withdrawalSchema), ah(async (req: AuthedRequest, res) =
     return;
   }
 
-  const available = Number(acct.balance) - Number(acct.lockedBalance);
-  if (parsedAmount > available) {
-    res.status(422).json({
-      success: false,
-      data: null,
-      error: { code: 'INSUFFICIENT_BALANCE', message: `Insufficient available balance (Available: $${available.toFixed(2)})` },
-    });
+  if (acct.accountType !== 'LIVE') {
+    res.status(422).json({ success: false, data: null, error: { code: 'LIVE_ONLY', message: 'Only live account funds can be withdrawn' } });
     return;
   }
 
-  // Lock funds immediately, release/apply on admin decision
-  const { w, updatedLocked } = await prisma.$transaction(async (tx) => {
-    const nextLocked = Number(acct.lockedBalance) + parsedAmount;
-    await tx.account.update({
-      where: { id: acct.id },
-      data: { lockedBalance: nextLocked },
-    });
+  // Lock funds immediately, release/apply on admin decision. The account row is locked so two
+  // parallel requests (or a trade opening at the same time) can never reserve more than is there.
+  const result = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Account" WHERE id = ${acct.id} FOR UPDATE`;
+    const fresh = await tx.account.findUniqueOrThrow({ where: { id: acct.id } });
+    const available = Number(fresh.balance) - Number(fresh.lockedBalance);
+    if (parsedAmount > available) return { available };
+    const locked = await tx.account.update({ where: { id: acct.id }, data: { lockedBalance: { increment: parsedAmount } } });
     const created = await tx.withdrawal.create({
       data: {
         userId: req.userId!,
@@ -68,12 +64,21 @@ r.post('/', validateBody(withdrawalSchema), ah(async (req: AuthedRequest, res) =
         status: 'REQUESTED',
       },
     });
-    return { w: created, updatedLocked: nextLocked };
+    return { w: created, updatedLocked: Number(locked.lockedBalance), balance: Number(locked.balance) };
   });
+  if (!('w' in result) || !result.w) {
+    res.status(422).json({
+      success: false,
+      data: null,
+      error: { code: 'INSUFFICIENT_BALANCE', message: `Insufficient available balance (Available: $${(result.available ?? 0).toFixed(2)})` },
+    });
+    return;
+  }
+  const { w, updatedLocked } = result as { w: NonNullable<typeof result.w>; updatedLocked: number };
 
   emitToUser(req.userId!, 'balance:updated', {
     accountId: acct.id,
-    balance: Number(acct.balance),
+    balance: result.balance,
     lockedBalance: updatedLocked,
   });
 
@@ -113,20 +118,22 @@ r.post('/:id/cancel', ah(async (req: AuthedRequest, res) => {
     return;
   }
 
-  const { updatedAcct, updatedWithdrawal } = await prisma.$transaction(async (tx) => {
-    const acct = await tx.account.findUnique({ where: { id: w.accountId } });
-    if (!acct) throw new Error('Account missing');
-    const newLocked = Math.max(0, Number(acct.lockedBalance) - Number(w.amount));
-    const ac = await tx.account.update({
-      where: { id: acct.id },
-      data: { lockedBalance: newLocked },
-    });
-    const uw = await tx.withdrawal.update({
-      where: { id: w.id },
+  const done = await prisma.$transaction(async (tx) => {
+    // conditional: if an admin moved it on meanwhile, nothing is released
+    const claimed = await tx.withdrawal.updateMany({
+      where: { id: w.id, status: { in: ['REQUESTED', 'UNDER_REVIEW'] } },
       data: { status: 'REJECTED', reviewNote: 'Cancelled by user' },
     });
+    if (!claimed.count) return null;
+    const ac = await tx.account.update({ where: { id: w.accountId }, data: { lockedBalance: { decrement: Number(w.amount) } } });
+    const uw = await tx.withdrawal.findUniqueOrThrow({ where: { id: w.id } });
     return { updatedAcct: ac, updatedWithdrawal: uw };
   });
+  if (!done) {
+    res.status(409).json({ success: false, data: null, error: { code: 'CANNOT_CANCEL', message: 'Withdrawal is already being processed' } });
+    return;
+  }
+  const { updatedAcct, updatedWithdrawal } = done;
 
   emitToUser(req.userId!, 'balance:updated', {
     accountId: w.accountId,

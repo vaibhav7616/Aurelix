@@ -10,6 +10,9 @@ import { createPending, cancelPending, listPending, PENDING_VALIDITY_MS } from '
 import { parsePage, pageMeta } from '../utils/pagination';
 import { orderLimiter } from '../middleware/rateLimit';
 import { Err } from '../utils/errors';
+import { utcDayStart } from '../utils/time';
+import { getPayoutRules } from '../trading/payout';
+import { getProvider } from '../services/marketService';
 
 const r = Router();
 
@@ -25,7 +28,8 @@ r.get('/config', ah(async (_req, res) => {
       fixedTimeMinLeadSec: FIXED_TIME_MIN_LEAD_SEC,
       pendingValidityMs: PENDING_VALIDITY_MS,
       serverTime: Date.now(),
-      assets: assets.map((a) => ({ symbol: a.symbol, payoutPct: a.payoutPct, minStake: Number(a.minOrder), maxStake: Number(a.maxOrder), enabled: a.enabled })),
+      payoutRules: await getPayoutRules(),
+      assets: assets.map((a) => ({ symbol: a.symbol, payoutPct: a.payoutPct, minStake: Number(a.minOrder), maxStake: Number(a.maxOrder), enabled: a.enabled, otc: getProvider().isOtc?.(a.symbol) ?? true })),
     },
     error: null,
   });
@@ -101,7 +105,7 @@ r.get('/sentiment', ah(async (req, res) => {
 
 // "Top of the day": traders ranked by net profit on trades settled since local midnight
 r.get('/leaderboard', ah(async (req: AuthedRequest, res) => {
-  const since = new Date(new Date().setHours(0, 0, 0, 0));
+  const since = utcDayStart();
   const rows = await prisma.binaryOption.groupBy({
     by: ['userId'],
     where: { settledAt: { gte: since }, status: { in: ['WON', 'LOST', 'TIE'] } },

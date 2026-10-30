@@ -4,7 +4,7 @@ import { get, post, apiError } from '../../lib/api';
 import { useTerminal, serverNow } from '../../stores/terminalStore';
 import { useUI } from '../../stores/uiStore';
 import { fmtMoney, fmtPrice } from '../../lib/format';
-import { fmtHMS, payoutFor, DURATION_PRESETS, nextFixedExpiry, FIXED_TIME_MIN_LEAD_SEC, type OptionsConfig, type OptionTrade, type PendingTrade, type Direction, type ExpiryMode } from '../../lib/options';
+import { fmtHMS, payoutFor, effectivePayoutPct, DURATION_PRESETS, nextFixedExpiry, FIXED_TIME_MIN_LEAD_SEC, type OptionsConfig, type OptionTrade, type PendingTrade, type Direction, type ExpiryMode } from '../../lib/options';
 import { getAssetMeta } from '../../lib/assetMeta';
 import { soundService } from '../../lib/sound';
 import { useSettingsStore } from '../../stores/settingsStore';
@@ -116,7 +116,9 @@ export function Ticket() {
   const meta = cfg?.assets.find((a) => a.symbol === symbol);
   const assetInfo = getAssetMeta(symbol);
   const tick = ticks[symbol];
-  const payoutPct = meta?.payoutPct ?? assetInfo.defaultPayout ?? 80;
+  // payout depends on the trade length (and OTC) — the server locks the same % in when the trade opens
+  const tradeSec = mode === 'TIME' ? Math.max(1, Math.round((fixedExpiry - serverNow()) / 1000)) : durationSec;
+  const payoutPct = effectivePayoutPct(meta?.payoutPct ?? assetInfo.defaultPayout ?? 80, tradeSec, meta?.otc ?? true, cfg?.payoutRules);
   const available = (account?.balance ?? 0) - (account?.lockedBalance ?? 0); // pending trades reserve their stake
   const effStake = stakeMode === 'PCT' ? Math.floor(available * stakePct) / 100 : stake;
   const payout = useMemo(() => payoutFor(effStake, payoutPct), [effStake, payoutPct]);

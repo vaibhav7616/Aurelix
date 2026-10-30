@@ -23,6 +23,8 @@ export interface RiskRuleSet {
   maxOpenPositions: number;
   maxDailyLoss: number;
   maxTotalLoss: number;
+  /** max |open UP − open DOWN| stake per asset on live accounts; 0 = no limit */
+  maxAssetExposure: number;
   tradingEnabled: boolean;
 }
 
@@ -31,8 +33,9 @@ const DEFAULTS: RiskRuleSet = {
   minOrderAmount: 1,
   maxPositionAmount: 100_000,
   maxOpenPositions: 20,
-  maxDailyLoss: 5_000,
-  maxTotalLoss: 20_000,
+  maxDailyLoss: 0,
+  maxTotalLoss: 0,
+  maxAssetExposure: 0,
   tradingEnabled: true,
 };
 
@@ -47,6 +50,7 @@ export async function getRiskRules(): Promise<RiskRuleSet> {
       maxOpenPositions: row.maxOpenPositions,
       maxDailyLoss: Number(row.maxDailyLoss),
       maxTotalLoss: Number(row.maxTotalLoss),
+      maxAssetExposure: Number(row.maxAssetExposure),
       tradingEnabled: row.tradingEnabled,
     };
   } catch {
@@ -66,6 +70,7 @@ export function evaluateRisk(ctx: RiskContext, rules: RiskRuleSet): void {
   if (ctx.amount > rules.maxPositionAmount) throw Err.maxPositionSize();
   if (ctx.amount > ctx.availableBalance) throw Err.insufficientBalance();
   if (ctx.openPositionsCount >= rules.maxOpenPositions) throw Err.maxOpenPositions();
-  if (ctx.todayRealizedPnl <= -rules.maxDailyLoss) throw Err.maxDailyLoss();
-  if (ctx.totalRealizedPnl <= -rules.maxTotalLoss) throw Err.maxTotalLoss();
+  // loss limits are optional: 0 = no limit
+  if (rules.maxDailyLoss > 0 && ctx.todayRealizedPnl <= -rules.maxDailyLoss) throw Err.maxDailyLoss();
+  if (rules.maxTotalLoss > 0 && ctx.totalRealizedPnl <= -rules.maxTotalLoss) throw Err.maxTotalLoss();
 }

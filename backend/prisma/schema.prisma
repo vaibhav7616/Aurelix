@@ -321,6 +321,10 @@ model BinaryOption {
   settledAt      DateTime?
   status         OptionStatus    @default(OPEN)
   idempotencyKey String?         @unique
+  /// settlement proof: time of the quote that decided the trade, and where it came from
+  /// (QUOTE = live quote at expiry, EXCHANGE = exchange trade record, REFUND = no price → stake returned)
+  closeQuoteAt   DateTime?
+  settleSource   String?
 
   account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
   asset   Asset   @relation(fields: [assetId], references: [id])
@@ -386,6 +390,8 @@ model Deposit {
   currency    String        @default("USD")
   provider    String        @default("demo")
   providerRef String?
+  /// UTR / transaction hash / bank reference the user submitted — unique, so one payment can't back two deposits
+  proofRef    String?       @unique
   status      DepositStatus @default(PENDING)
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
@@ -442,6 +448,8 @@ model RiskRule {
   maxOpenPositions  Int
   maxDailyLoss      Decimal  @db.Decimal(18, 2)
   maxTotalLoss      Decimal  @db.Decimal(18, 2)
+  /// max |open UP stake − open DOWN stake| on one asset across live accounts (0 = no limit)
+  maxAssetExposure  Decimal  @default(0) @db.Decimal(18, 2)
   tradingEnabled    Boolean  @default(true)
   updatedAt         DateTime @updatedAt
 

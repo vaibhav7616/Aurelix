@@ -27,6 +27,13 @@ export interface MarketDataProvider {
   onTick(cb: (tick: Tick) => void): void;
   /** Quote that was live at instant `ts` (for exact expiry settlement), null if unknown. */
   priceAt?(symbol: string, ts: number): number | null;
+  /** ms since the symbol's price last came from its source (feed or OTC engine); null if unknown/halted. */
+  quoteAgeMs?(symbol: string): number | null;
+  /** true when the platform makes the price itself (no outside market feed) */
+  isOtc?(symbol: string): boolean;
+  /** Exchange-recorded price at `ts` for live-fed symbols (used when the in-memory history has no quote,
+   *  e.g. after a restart). Resolves null when there is no data; rejects on a network/exchange error. */
+  historicalPrice?(symbol: string, ts: number): Promise<number | null>;
 }
 
 /** Guarantee strictly time-ascending, deduped candles (chart libs hard-require this).
