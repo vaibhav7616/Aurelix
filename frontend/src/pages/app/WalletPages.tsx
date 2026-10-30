@@ -546,8 +546,24 @@ export function WalletPage() {
     }
   };
 
-  const handleCopy = (text: string) => {
-    navigator.clipboard?.writeText(text);
+  const handleCopy = async (text: string) => {
+    // navigator.clipboard only exists on HTTPS/localhost — fall back to a hidden textarea elsewhere
+    let ok = false;
+    try {
+      if (navigator.clipboard) { await navigator.clipboard.writeText(text); ok = true; }
+    } catch { /* fall through */ }
+    if (!ok) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { ok = document.execCommand('copy'); } catch { ok = false; }
+      ta.remove();
+    }
+    if (!ok) { push('err', 'Could not copy — select the text and copy it manually'); return; }
     setCopied(true);
     setTimeout(() => setCopied(false), 2500);
   };
