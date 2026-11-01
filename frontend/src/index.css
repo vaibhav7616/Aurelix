@@ -12,7 +12,7 @@
   --c-fog: 169 181 164; --c-mute: 110 123 106; --c-ink1: 239 231 211; --c-line: 45 56 46;
 }
 
-/* Signed-in app: Quotex-style navy terminal with blue accent, green up / red down. */
+/* Signed-in app: legacy navy palette (unused — see .theme-app). */
 /* ── Signed-in application palette ────────────────────────────────────────────────────────
    Applied by AppShell/AdminShell on <html> (class added on mount, removed on unmount), so
    nothing here can reach the public website. Same forest/cream family as the site, tuned
@@ -150,3 +150,66 @@ body {
 
 .no-scrollbar { scrollbar-width: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* ── Affiliate Center sign-in: 3D brand scene ─────────────────────────────── */
+.aff3d-stage { perspective: 1100px; perspective-origin: 50% 40%; }
+.aff3d-scene {
+  position: absolute; inset: 0; transform-style: preserve-3d;
+  transform: rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
+  transition: transform 0.25s ease-out;
+}
+.aff3d-floor {
+  position: absolute; left: -50%; right: -50%; bottom: -38%; height: 90%;
+  transform: rotateX(74deg); transform-origin: 50% 100%;
+  background-image:
+    linear-gradient(rgb(var(--c-accent-400) / 0.28) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(var(--c-accent-400) / 0.28) 1px, transparent 1px);
+  background-size: 56px 56px;
+  -webkit-mask-image: linear-gradient(to top, #000 10%, transparent 85%);
+  mask-image: linear-gradient(to top, #000 10%, transparent 85%);
+  animation: aff3d-floor 3.2s linear infinite;
+}
+@keyframes aff3d-floor { to { background-position: 0 56px, 0 0; } }
+.aff3d-glow {
+  position: absolute; width: 420px; height: 420px; border-radius: 9999px; filter: blur(70px);
+  background: radial-gradient(circle, rgb(var(--c-accent-500) / 0.45), transparent 65%);
+}
+
+/* the logo as a solid 3D block: stacked layers give it thickness */
+.aff3d-logo { position: relative; transform-style: preserve-3d; animation: aff3d-spin 14s linear infinite; }
+.aff3d-logo > i {
+  position: absolute; inset: 0; border-radius: 22%;
+  background: rgb(var(--c-accent-700));
+  transform: translateZ(calc(var(--z) * 1px));
+}
+.aff3d-logo > .aff3d-face {
+  position: absolute; inset: 0; transform: translateZ(14px); border-radius: 22%;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.06), 0 30px 80px -10px rgb(var(--c-accent-500) / 0.55);
+}
+.aff3d-logo > .aff3d-back { position: absolute; inset: 0; transform: rotateY(180deg); border-radius: 22%; }
+@keyframes aff3d-spin {
+  0% { transform: rotateY(-28deg) rotateX(10deg); }
+  50% { transform: rotateY(28deg) rotateX(-6deg); }
+  100% { transform: rotateY(-28deg) rotateX(10deg); }
+}
+
+.aff3d-card {
+  position: absolute; transform-style: preserve-3d;
+  border: 1px solid rgb(var(--c-accent-300) / 0.18);
+  background: linear-gradient(140deg, rgb(var(--c-base-800) / 0.85), rgb(var(--c-base-900) / 0.7));
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 24px 50px -18px rgb(0 0 0 / 0.7);
+  border-radius: 12px; padding: 12px 14px;
+  animation: aff3d-float 6s ease-in-out infinite;
+}
+@keyframes aff3d-float {
+  0%, 100% { transform: translate3d(0, 0, var(--tz, 60px)) rotateY(var(--ty, 0deg)); }
+  50% { transform: translate3d(0, -12px, var(--tz, 60px)) rotateY(var(--ty, 0deg)); }
+}
+.aff3d-bar { transform-origin: bottom; animation: aff3d-bar 2.8s ease-in-out infinite; }
+@keyframes aff3d-bar { 0%, 100% { transform: scaleY(0.55); } 50% { transform: scaleY(1); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .aff3d-floor, .aff3d-logo, .aff3d-card, .aff3d-bar { animation: none !important; }
+  .aff3d-scene { transition: none; }
+}

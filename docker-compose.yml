@@ -59,6 +59,7 @@ services:
       MARKET_PROVIDER: ${MARKET_PROVIDER:-demo}
       PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-demo}
       DEMO_STARTING_BALANCE: ${DEMO_STARTING_BALANCE:-10000}
+      MIN_WITHDRAWAL_USD: ${MIN_WITHDRAWAL_USD:-100}
       # deposit destinations (private — only from .env, never the database); empty = method not offered
       DEPOSIT_UPI_VPA: ${DEPOSIT_UPI_VPA:-}
       DEPOSIT_UPI_PAYEE: ${DEPOSIT_UPI_PAYEE:-}
@@ -70,6 +71,11 @@ services:
       DEPOSIT_CRYPTO_USDT_TRC20: ${DEPOSIT_CRYPTO_USDT_TRC20:-}
       DEPOSIT_CRYPTO_BTC: ${DEPOSIT_CRYPTO_BTC:-}
       DEPOSIT_CRYPTO_ETH: ${DEPOSIT_CRYPTO_ETH:-}
+      # public support channels shown on /contact (empty = not shown)
+      CONTACT_EMAIL: ${CONTACT_EMAIL:-}
+      CONTACT_WHATSAPP: ${CONTACT_WHATSAPP:-}
+      CONTACT_TELEGRAM: ${CONTACT_TELEGRAM:-}
+      CONTACT_HOURS: ${CONTACT_HOURS:-}
     ports:
       - "4000:4000"
     volumes:

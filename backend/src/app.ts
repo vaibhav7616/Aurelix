@@ -25,6 +25,10 @@ import withdrawalRoutes from './routes/withdrawals';
 import notificationRoutes from './routes/notifications';
 import adminRoutes from './routes/admin';
 import leaderboardRoutes from './routes/leaderboard';
+import publicRoutes from './routes/public';
+import promotionRoutes from './routes/promotions';
+import affiliateRoutes from './routes/affiliate';
+import adminAffiliateRoutes from './routes/adminAffiliates';
 
 export function createApp(): express.Express {
   const app = express();
@@ -73,6 +77,10 @@ export function createApp(): express.Express {
   app.use('/api/v1/notifications', apiLimiter, notificationRoutes);
   app.use('/api/v1/admin', apiLimiter, adminRoutes);
   app.use('/api/v1/leaderboard', apiLimiter, leaderboardRoutes);
+  app.use('/api/v1/public', apiLimiter, publicRoutes);
+  app.use('/api/v1/promotions', apiLimiter, promotionRoutes);
+  app.use('/api/v1/affiliate', apiLimiter, affiliateRoutes);
+  app.use('/api/v1/admin/affiliates', apiLimiter, adminAffiliateRoutes);
 
   app.use('/api', (_req, res) => res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'Route not found' } }));
   app.use(errorHandler);

@@ -88,7 +88,7 @@ r.get('/candles', ah(async (req, res) => {
   res.json({ success: true, data: { demo: getProvider().isDemo, candles, serverTime: Date.now() }, error: null });
 }));
 
-// Quotex Algorithmic Trading Signals (RSI, MACD, EMA momentum across timeframes)
+// Algorithmic trading signals (RSI, MACD, EMA momentum across timeframes)
 r.get('/signals', ah(async (_req, res) => {
   const data = await getLiveSignals();
   res.json({ success: true, data, error: null });

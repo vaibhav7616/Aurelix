@@ -4,7 +4,7 @@ Code: `backend/src/trading/optionsEngine.ts` (fixed-time trades — the product)
 `services/pnlService.ts`, `trading/slTpMonitor.ts` (legacy CFD path, still available under `/orders`, `/positions`),
 `market/DemoMarketProvider.ts`.
 
-## Fixed-time trades (`optionsEngine`) — Quotex-style flow
+## Fixed-time trades (`optionsEngine`)
 
 The terminal is a **fixed-time / binary-options** flow: the trader picks an **expiry time** (5s … 4h), an
 **investment** (min `Asset.minOrder`, default $1) and presses **Up** or **Down**. Each asset carries a
@@ -34,7 +34,7 @@ Pure helpers `settleOutcome`, `optionProfit`, `settlementCredit` are unit-tested
 
 ## Market feed & candles (`market/DemoMarketProvider.ts`) — how the chart behaves
 
-The feed is built to behave like a fixed-time-trade broker feed (Quotex-style):
+The feed is built to behave like a fixed-time-trade broker feed:
 
 | Property | Behaviour |
 |---|---|

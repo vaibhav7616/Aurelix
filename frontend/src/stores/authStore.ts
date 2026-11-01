@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { get, post, isRemembered, hasSession, setSession, clearSession, refreshAccess } from '../lib/api';
+import { readAttribution, clearAttribution } from '../lib/attribution';
 
 export interface User { id: string; email: string; firstName: string; lastName: string; role: string }
 
@@ -8,7 +9,7 @@ interface AuthState {
   ready: boolean;
   remember: boolean;
   login: (identifier: string, password: string, remember?: boolean) => Promise<void>;
-  register: (input: { email: string; password: string; firstName: string; lastName: string }) => Promise<void>;
+  register: (input: { email: string; password: string; firstName: string; lastName: string; promo?: string }, opts?: { partner?: boolean }) => Promise<void>;
   logout: () => Promise<void>;
   bootstrap: () => Promise<void>;
 }
@@ -32,8 +33,12 @@ export const useAuth = create<AuthState>((set) => ({
     setSession(data.accessToken, remember); // the refresh token arrives as an HttpOnly cookie
     set({ user: data.user, remember, ready: true });
   },
-  register: async (input) => {
-    await post('/api/v1/auth/register', input);
+  register: async (input, opts) => {
+    // partner attribution from a tracking link (/r/CODE or ?lid=N), plus an optional partner promo code.
+    // Partner (Affiliate Center) sign-ups are never attributed to another partner as a trader.
+    const a = opts?.partner ? null : readAttribution();
+    await post('/api/v1/auth/register', { ...input, ...(a ? { aff: a.aff, sub: a.sub, clickId: a.clickId } : {}) });
+    clearAttribution();
   },
   logout: async () => {
     try { await post('/api/v1/auth/logout', {}); } catch { /* ignore */ }

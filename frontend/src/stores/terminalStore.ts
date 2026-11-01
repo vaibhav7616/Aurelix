@@ -29,7 +29,7 @@ interface TerminalState {
   accountId: string | null;
   ticks: Record<string, Tick>;
   favorites: string[];
-  /** asset tabs across the top of the terminal (Quotex style) */
+  /** asset tabs across the top of the terminal */
   openTabs: string[];
   /** "pending trade" (open at a target price) toggle in the ticket */
   pendingTrade: boolean;

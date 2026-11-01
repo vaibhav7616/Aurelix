@@ -1,6 +1,6 @@
 import { useSettingsStore } from '../stores/settingsStore';
 
-// Web Audio API Synthesizer for Quotex-style trading sounds
+// Web Audio API Synthesizer for trading sounds
 class SoundService {
   private ctx: AudioContext | null = null;
   private enabled = true;

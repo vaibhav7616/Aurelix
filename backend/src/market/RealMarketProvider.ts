@@ -4,7 +4,7 @@
 //       - history: Binance klines (1s klines aggregated for 5s/10s/15s/30s, native for 1m+)
 //       - live:    <pair>@aggTrade stream (every executed trade) + <pair>@miniTicker (24h open)
 //   • Forex: there is no free real-time FX feed, so FX pairs run as OTC markets (like
-//     Quotex OTC): the simulated tape of DemoMarketProvider, anchored to the real
+//     OTC): the simulated tape of DemoMarketProvider, anchored to the real
 //     reference rate (ECB via frankfurter.dev) and re-anchored gently every hour.
 //
 // Everything else — the candle book for every timeframe, candle open/close events,

@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
 export const registerSchema = z.object({
+  /** affiliate attribution captured from a tracking link (/r/CODE) or a partner promo code */
+  aff: z.string().trim().max(16).regex(/^[A-Za-z0-9]*$/).optional(),
+  promo: z.string().trim().max(24).regex(/^[A-Za-z0-9]*$/).optional(),
+  sub: z.string().trim().max(64).optional(),
+  clickId: z.string().trim().max(128).optional(),
   email: z.string().email().max(255),
   password: z.string().min(8).max(128),
   firstName: z.string().min(1).max(80),

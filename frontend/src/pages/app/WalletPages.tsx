@@ -103,7 +103,7 @@ interface DepositRow {
   createdAt: string;
 }
 
-// Payment method configurations matching Quotex platform
+// Payment method configurations
 const DEPOSIT_METHODS = [
   {
     id: 'crypto_usdt_trc20',
@@ -180,6 +180,41 @@ function QrDisplay({ payload, label }: { payload: string; label: string }) {
         <div className="w-[180px] h-[180px] flex items-center justify-center text-center text-[11px] text-base-950 px-3">QR unavailable — pay to the UPI ID shown</div>
       )}
       <span className="text-[10px] font-bold text-base-700 mt-2">{label}</span>
+    </div>
+  );
+}
+
+interface BonusInfo {
+  live: { accountId: string; balance: number; bonusLocked: number; withdrawable: number } | null;
+  bonuses: Array<{ id: string; code: string | null; amount: number; status: 'ACTIVE' | 'COMPLETED' | 'FORFEITED'; turnoverRequired: number; turnoverDone: number; createdAt: string }>;
+}
+
+/** Active deposit bonuses: how much is locked and how much trading is left to unlock it. */
+function BonusStatus() {
+  const { data } = useQuery({ queryKey: ['bonuses'], queryFn: () => get<BonusInfo>('/api/v1/promotions/bonuses'), refetchInterval: 15_000 });
+  const active = (data?.bonuses ?? []).filter((b) => b.status === 'ACTIVE');
+  if (!active.length || !data?.live) return null;
+  return (
+    <div className="ax-panel p-4 space-y-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="text-[13px] font-semibold text-ink1">Active bonus</div>
+        <div className="text-xs text-mute ax-num">Locked {fmtMoney(data.live.bonusLocked)} · withdrawable now <span className="text-ink1">{fmtMoney(data.live.withdrawable)}</span></div>
+      </div>
+      {active.map((b) => {
+        const pct = Math.min(100, (b.turnoverDone / b.turnoverRequired) * 100);
+        return (
+          <div key={b.id}>
+            <div className="flex justify-between text-xs ax-num">
+              <span className="text-fog">{fmtMoney(b.amount)} bonus{b.code ? ` · ${b.code}` : ''}</span>
+              <span className="text-mute">Turnover {fmtMoney(b.turnoverDone)} / {fmtMoney(b.turnoverRequired)}</span>
+            </div>
+            <div className="h-1.5 rounded-full bg-base-800 mt-1.5 overflow-hidden" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100} aria-label="Bonus turnover progress">
+              <div className="h-full bg-accent-400" style={{ width: `${pct}%` }} />
+            </div>
+          </div>
+        );
+      })}
+      <p className="text-[11px] text-mute">Settled live trades count toward turnover (ties don’t). Withdrawing more than the withdrawable amount before turnover is complete forfeits the bonus. <a href="/promotions" className="text-accent-300 hover:underline">Bonus terms</a></p>
     </div>
   );
 }
@@ -290,7 +325,7 @@ export function WalletPage() {
   const [copied, setCopied] = useState(false);
   const [timeLeftSec, setTimeLeftSec] = useState(900); // 15 min countdown
 
-  // PhonePe / UPI Quotex-style Cashier state
+  // PhonePe / UPI cashier state
   const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
   const [selectedUpiApp, setSelectedUpiApp] = useState<'phonepe' | 'gpay' | 'paytm' | 'generic'>('phonepe');
   const [upiSubTab, setUpiSubTab] = useState<'qr' | 'utr'>('qr');
@@ -367,6 +402,9 @@ export function WalletPage() {
       ['deposits-list', 'wallet', 'accounts'].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
     }
   }, [pollStatus?.status, isAwaitingPayment]);
+
+  const { data: promoCfg } = useQuery({ queryKey: ['pub-promotions'], queryFn: () => get<{ bonus: { turnoverMultiple: number; offers: Array<{ code: string; bonusPct: number; minDeposit: number; title: string }> } }>('/api/v1/public/promotions'), staleTime: 60_000 });
+  const promoOffers = promoCfg?.bonus.offers;
 
   // Validate promo code against promo engine
   const validatePromo = useMutation({
@@ -552,7 +590,9 @@ export function WalletPage() {
   // ─────────────────────────────────────────────────────────────
   // wdStep: 'FORM' | 'REVIEW' | 'SUCCESS'
   const [wdStep, setWdStep] = useState<'FORM' | 'REVIEW' | 'SUCCESS'>('FORM');
-  const [wdAmount, setWdAmount] = useState('50');
+  const { data: limits } = useQuery({ queryKey: ['options-config'], queryFn: () => get<{ minWithdrawal?: number }>('/api/v1/options/config'), staleTime: 60_000 });
+  const minWithdrawal = limits?.minWithdrawal ?? 100;
+  const [wdAmount, setWdAmount] = useState('100');
   const [wdMethod, setWdMethod] = useState<'bank' | 'upi' | 'crypto'>('bank');
   // Bank fields
   const [bankHolderName, setBankHolderName] = useState('');
@@ -568,7 +608,7 @@ export function WalletPage() {
   const [lastWithdrawal, setLastWithdrawal] = useState<WithdrawalRow | null>(null);
 
   const requestWithdrawal = useMutation({
-    mutationFn: () => {
+    mutationFn: (forfeitBonus?: boolean) => {
       let details: Record<string, unknown> = {};
       if (wdMethod === 'bank') {
         details = { holderName: bankHolderName, bankName, accountNumber: bankAccNumber, ifsc: bankIfsc };
@@ -582,15 +622,24 @@ export function WalletPage() {
         amount: parseFloat(wdAmount),
         method: wdMethod,
         details,
+        ...(forfeitBonus === true ? { forfeitBonus: true } : {}),
       });
     },
     onSuccess: (w) => {
       setLastWithdrawal(w);
       setWdStep('SUCCESS');
       push('ok', `Withdrawal requested for ${fmtMoney(w.amount)}. Funds are locked in review.`);
-      ['wallet', 'accounts', 'withdrawals-list'].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+      ['wallet', 'accounts', 'withdrawals-list', 'bonuses'].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
     },
-    onError: (e) => push('err', apiError(e)),
+    onError: (e, forfeitBonus) => {
+      const code = (e as { response?: { data?: { error?: { code?: string } } } }).response?.data?.error?.code;
+      // the bonus locks part of the balance — ask before giving it up
+      if (code === 'BONUS_LOCKED' && forfeitBonus !== true && window.confirm(`${apiError(e)}\n\nWithdraw anyway and forfeit the bonus?`)) {
+        requestWithdrawal.mutate(true);
+        return;
+      }
+      push('err', apiError(e));
+    },
   });
 
   const cancelWithdrawal = useMutation({
@@ -611,6 +660,8 @@ export function WalletPage() {
 
   return (
     <div className="max-w-[1140px] mx-auto p-4 md:p-6 space-y-5 select-none">
+      <BonusStatus />
+
       {/* ── Top Header Bar ─────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-line pb-4">
         <div>
@@ -873,7 +924,7 @@ export function WalletPage() {
                       <span className="font-mono font-bold text-cream">{fmtMoney(parsedDepAmt)}</span>
                     </div>
 
-                    {/* Quotex Deposit Promo Code Engine */}
+                    {/* Deposit promo code */}
                     <div className="p-3.5 rounded-md bg-base-800/90 border border-warn/30 space-y-3">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-bold text-warn flex items-center gap-1.5">
@@ -912,12 +963,7 @@ export function WalletPage() {
 
                           {/* Quick Promo Chips */}
                           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pt-0.5">
-                            {[
-                              ['WELCOME50', '+50% Welcome'],
-                              ['BONUS30', '+30% Booster'],
-                              ['VIP100', '+100% VIP'],
-                              ['RISKFREE', '+20% Bonus'],
-                            ].map(([code, label]) => (
+                            {(promoOffers ?? []).map((o) => [o.code, `+${o.bonusPct}% ${o.title}`] as const).map(([code, label]) => (
                               <button
                                 key={code}
                                 onClick={() => {
@@ -1112,9 +1158,9 @@ export function WalletPage() {
                         </div>
                       </div>
 
-                      {/* Quotex-Style PhonePe & UPI Multi-Channel Cashier */}
+                      {/* PhonePe & UPI cashier */}
                       <div className="space-y-4">
-                        {/* Quotex Sub-Navigation Tabs */}
+                        {/* Sub-navigation tabs */}
                         <div className="flex border-b border-line gap-1 overflow-x-auto pb-1">
                           <button
                             type="button"
@@ -1165,7 +1211,7 @@ export function WalletPage() {
                           </div>
                         )}
 
-                        {/* TAB 1: PHONEPE QR CODE (QUOTEX DESKTOP DEFAULT) */}
+                        {/* TAB 1: PHONEPE QR CODE (DESKTOP DEFAULT) */}
                         {upiSubTab === 'qr' && (
                           <div className="p-5 rounded-lg bg-base-950 border border-line space-y-5">
                             <div className="flex flex-col md:flex-row items-center gap-6">
@@ -1612,7 +1658,7 @@ export function WalletPage() {
                 <div>
                   <label className="text-xs font-bold text-cream block mb-1.5">Withdrawal Amount (USD)</label>
                   <div className="flex gap-2 mb-2">
-                    {[20, 50, 100, 250, 500].map((amt) => (
+                    {[100, 250, 500, 1000].map((amt) => (
                       <button
                         key={amt}
                         type="button"
@@ -1637,12 +1683,13 @@ export function WalletPage() {
                   </div>
                   <input
                     type="number"
-                    min="10"
+                    min={minWithdrawal}
                     max={availableBalance}
                     value={wdAmount}
                     onChange={(e) => setWdAmount(e.target.value)}
                     className="ax-input font-mono text-xs font-bold"
                   />
+                  <p className={clsx('text-[11px] mt-1', parsedWdAmt > 0 && parsedWdAmt < minWithdrawal ? 'text-down' : 'text-mute')}>Minimum withdrawal {fmtMoney(minWithdrawal)}.</p>
                 </div>
 
                 {/* Withdrawal Method Selection */}
@@ -1746,14 +1793,14 @@ export function WalletPage() {
                       className="ax-input text-xs font-mono"
                     />
                     <p className="text-[10px] text-warn">
-                      Ensure your wallet supports TRC20 USDT. Minimum payout: $10.00.
+                      Ensure your wallet supports TRC20 USDT. Minimum payout: {fmtMoney(minWithdrawal)}.
                     </p>
                   </div>
                 )}
 
                 <button
                   onClick={() => setWdStep('REVIEW')}
-                  disabled={!isLiveSelected || parsedWdAmt < 10 || parsedWdAmt > availableBalance}
+                  disabled={!isLiveSelected || parsedWdAmt < minWithdrawal || parsedWdAmt > availableBalance}
                   className="w-full py-3 rounded-md bg-warn hover:bg-warn text-base-950 font-bold text-xs uppercase tracking-wider transition shadow-lg disabled:opacity-50"
                 >
                   Review & Request Withdrawal →
@@ -1802,7 +1849,7 @@ export function WalletPage() {
 
               <div className="flex gap-2">
                 <button
-                  onClick={() => requestWithdrawal.mutate()}
+                  onClick={() => requestWithdrawal.mutate(false)}
                   disabled={requestWithdrawal.isPending}
                   className="flex-1 py-3 rounded-md bg-warn hover:bg-warn text-base-950 font-bold text-xs uppercase tracking-wider transition shadow-lg"
                 >

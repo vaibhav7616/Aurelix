@@ -25,6 +25,8 @@ export const env = {
   DEMO_STARTING_BALANCE: parseInt(process.env.DEMO_STARTING_BALANCE ?? '10000', 10),
   DEMO_TICK_INTERVAL_MS: parseInt(process.env.DEMO_TICK_INTERVAL_MS ?? '40', 10),
   /** a quote older than this is stale: no new trades open on it and settlement won't use it */
+  /** smallest withdrawal a user can request (USD) */
+  MIN_WITHDRAWAL_USD: Math.max(1, Number(process.env.MIN_WITHDRAWAL_USD ?? 100) || 100),
   MAX_QUOTE_AGE_MS: parseInt(process.env.MAX_QUOTE_AGE_MS ?? '5000', 10),
   isProd: (process.env.NODE_ENV ?? 'development') === 'production',
 };

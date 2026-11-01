@@ -1,6 +1,6 @@
 # Aurelix — Demo Trading Platform
 
-**Aurelix** is a complete, original full-stack web trading platform built around **fixed-time (Quotex-style) trades**:
+**Aurelix** is a complete, original full-stack web trading platform built around **fixed-time trades**:
 pick an expiry time and an investment, press **Up** or **Down**, and the trade settles automatically at expiry with a
 fixed payout per asset. Public website, authenticated trading terminal, demo market engine, options/risk engines,
 wallet ledger, withdrawals workflow, admin control deck, real-time websockets — all running on Docker.

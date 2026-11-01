@@ -23,6 +23,7 @@ services:
       FRONTEND_URL: ${FRONTEND_URL:?set FRONTEND_URL e.g. https://app.example.com}
       CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS e.g. https://app.example.com}
       MARKET_PROVIDER: ${MARKET_PROVIDER:-real}
+      MIN_WITHDRAWAL_USD: ${MIN_WITHDRAWAL_USD:-100}
       TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
       PAYMENT_PROVIDER: demo   # only used for demo-account instant deposits; live deposits are admin-verified
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-}
@@ -38,6 +39,11 @@ services:
       DEPOSIT_CRYPTO_USDT_TRC20: ${DEPOSIT_CRYPTO_USDT_TRC20:-}
       DEPOSIT_CRYPTO_BTC: ${DEPOSIT_CRYPTO_BTC:-}
       DEPOSIT_CRYPTO_ETH: ${DEPOSIT_CRYPTO_ETH:-}
+      # public support channels shown on /contact (empty = not shown)
+      CONTACT_EMAIL: ${CONTACT_EMAIL:-}
+      CONTACT_WHATSAPP: ${CONTACT_WHATSAPP:-}
+      CONTACT_TELEGRAM: ${CONTACT_TELEGRAM:-}
+      CONTACT_HOURS: ${CONTACT_HOURS:-}
   frontend:
     build:
       target: production

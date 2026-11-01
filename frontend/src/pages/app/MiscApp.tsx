@@ -112,7 +112,7 @@ export function MorePage() {
   const links: Array<[string, string]> = [
     ['/dashboard', 'Analytics'], ['/top', 'Top of the day'], ['/markets-app', 'Market'], ['/history', 'Trade history'],
     ['/wallet', 'Wallet'], ['/deposits', 'Deposits'], ['/withdrawals', 'Withdrawals'], ['/notifications', 'Notifications'],
-    ['/settings', 'Account'], ['/support', 'Support & hotkeys'],
+    ['/settings', 'Account'], ['/affiliate', 'Affiliate Center'], ['/support', 'Support & hotkeys'],
     ...(isAdmin ? [['/admin', 'Control deck'] as [string, string]] : []),
   ];
   return (

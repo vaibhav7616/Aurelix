@@ -13,6 +13,7 @@ import { Err } from '../utils/errors';
 import { utcDayStart } from '../utils/time';
 import { getPayoutRules } from '../trading/payout';
 import { getProvider } from '../services/marketService';
+import { env } from '../config/env';
 
 const r = Router();
 
@@ -29,6 +30,7 @@ r.get('/config', ah(async (_req, res) => {
       pendingValidityMs: PENDING_VALIDITY_MS,
       serverTime: Date.now(),
       payoutRules: await getPayoutRules(),
+      minWithdrawal: env.MIN_WITHDRAWAL_USD,
       assets: assets.map((a) => ({ symbol: a.symbol, payoutPct: a.payoutPct, minStake: Number(a.minOrder), maxStake: Number(a.maxOrder), enabled: a.enabled, otc: getProvider().isOtc?.(a.symbol) ?? true })),
     },
     error: null,

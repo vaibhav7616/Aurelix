@@ -17,7 +17,7 @@ import { useShallow } from 'zustand/react/shallow';
 interface Account { id: string; accountNumber: string; balance: number; lockedBalance?: number; equity: number; accountType: 'DEMO' | 'LIVE' }
 interface NotifResp { items: Array<{ id: string; title: string; message: string }>; unread: number }
 
-/** Left sidebar sections (Quotex order). [route, label, svg path] */
+/** Left sidebar sections . [route, label, svg path] */
 const RAIL: Array<[string, string, string]> = [
   ['/trading', 'Trade', 'M4 19V9M9 19V5M14 19v-7M19 19V8M3 21h18'],
   ['/dashboard', 'Analytics', 'M4 20V10M10 20V4M16 20v-6M22 20H2'],
@@ -53,7 +53,7 @@ function Dropdown({ open, className, children }: { open: boolean; className?: st
   return <div className={clsx('absolute top-[calc(100%+6px)] right-0 bg-base-850 border border-line rounded-md shadow-pop z-50 overflow-hidden', className)}>{children}</div>;
 }
 
-/** Quotex account switcher: "DEMO ACCOUNT / $10,000.00" pill with a list of accounts, refill and new demo account. */
+/** Account switcher: "DEMO ACCOUNT / $10,000.00" pill with a list of accounts, refill and new demo account. */
 function AccountSwitcher({ accounts, active, inrRate }: { accounts: Account[]; active?: Account; inrRate: number }) {
   const [open, setOpen] = useState(false);
   const ref = useOutside<HTMLDivElement>(open, () => setOpen(false));
@@ -207,7 +207,7 @@ function ProfileMenu({ isAdmin }: { isAdmin: boolean }) {
         <div className="py-1">
           {[
             ['/settings', 'Account settings'], ['/wallet', 'Wallet & transactions'], ['/history', 'Trading history'], ['/top', 'Top 50 traders'],
-            ['/notifications', 'Notifications'], ['/support', 'Help & hotkeys'],
+            ['/notifications', 'Notifications'], ['/affiliate', 'Affiliate Center'], ['/support', 'Help & hotkeys'],
             ...(isAdmin ? [['/admin', 'Control deck'] as [string, string]] : []),
           ].map(([to, label]) => (
             <button key={to} onClick={() => go(to)} className="w-full text-left px-4 py-2 text-[12px] text-fog hover:text-ink1 hover:bg-white/[0.05]">{label}</button>

@@ -7,6 +7,7 @@ const GROUPS: Array<{ title: string; items: Array<[string, string]> }> = [
   { title: 'Monitor', items: [['/admin', 'Dashboard'], ['/admin/market', 'Market engine']] },
   { title: 'Operations', items: [['/admin/users', 'Users'], ['/admin/accounts', 'Trading accounts'], ['/admin/assets', 'Assets & payouts'], ['/admin/options', 'Fixed-time trades'], ['/admin/orders', 'Orders (legacy)'], ['/admin/positions', 'Positions (legacy)'], ['/admin/trades', 'CFD trades (legacy)']] },
   { title: 'Money', items: [['/admin/deposits', 'Deposits'], ['/admin/withdrawals', 'Withdrawals'], ['/admin/payments', 'Payments']] },
+  { title: 'Affiliates', items: [['/admin/affiliates', 'Partners'], ['/admin/affiliate-payouts', 'Affiliate payouts'], ['/admin/affiliate-support', 'Affiliate support']] },
   { title: 'Control', items: [['/admin/risk', 'Risk rules'], ['/admin/notifications', 'Notifications'], ['/admin/audit', 'Audit logs'], ['/admin/settings', 'System settings']] },
 ];
 

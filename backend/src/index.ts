@@ -6,6 +6,9 @@ import { initSocket } from './websocket/socketServer';
 import { startMarket, stopMarket } from './services/marketService';
 import { startSettlementLoop, stopSettlementLoop } from './trading/optionsEngine';
 import { startPendingEngine, stopPendingEngine } from './trading/pendingEngine';
+import { setEventSinks, startAffiliateJobs } from './affiliate/service';
+import { firePostbacks } from './affiliate/postbacks';
+import { sendTelegram, startTelegramBot } from './affiliate/telegram';
 
 async function main(): Promise<void> {
   const app = createApp();
@@ -15,6 +18,9 @@ async function main(): Promise<void> {
     await startMarket();
     logger.info('demo market engine started');
     startSettlementLoop();
+    setEventSinks(firePostbacks, sendTelegram);
+    startAffiliateJobs(); // weekly affiliate payouts (hourly check, once per period)
+    startTelegramBot();
     logger.info('option settlement loop started');
     await startPendingEngine();
   } catch (e) {

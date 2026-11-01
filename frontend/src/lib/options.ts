@@ -55,7 +55,7 @@ export interface PendingTrade {
   accountId: string;
 }
 
-/** Expiry modes (Quotex "SWITCH TIME"): TIMER = duration from open, TIME = fixed clock minute. */
+/** Expiry modes ("SWITCH TIME"): TIMER = duration from open, TIME = fixed clock minute. */
 export type ExpiryMode = 'TIMER' | 'TIME';
 export const FIXED_TIME_MIN_LEAD_SEC = 30;
 

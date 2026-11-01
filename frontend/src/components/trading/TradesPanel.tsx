@@ -36,7 +36,7 @@ export function settleNote(t: OptionTrade): string | undefined {
   return `Entry ${t.entryPrice} → close ${t.closePrice ?? '—'}\nClosing quote: ${at}\nSource: ${SOURCE_LABEL[t.settleSource]}`;
 }
 
-/** Ring countdown, Quotex-style. */
+/** Ring countdown. */
 function Ring({ frac, tone }: { frac: number; tone: 'up' | 'down' | 'flat' }) {
   const r = 9; const c = 2 * Math.PI * r;
   const color = tone === 'up' ? '#32A66A' : tone === 'down' ? '#D85C52' : '#A6B0A3';
@@ -48,7 +48,7 @@ function Ring({ frac, tone }: { frac: number; tone: 'up' | 'down' | 'flat' }) {
   );
 }
 
-/** Compact card list — used in the right rail under the ticket (like Quotex's "Trades" tab). */
+/** Compact card list — used in the right rail under the ticket . */
 export function OpenTradesList({ accountId }: { accountId?: string | null }) {
   const { ticks } = useTerminal(useShallow((s) => ({ ticks: s.ticks })));
   const now = useNow();
@@ -223,7 +223,7 @@ export function TradeHistoryTable({ pageSize = 30, compact = false }: { pageSize
   );
 }
 
-/** Compact settled trades card list — Quotex style for the right rail sidebar. */
+/** Compact settled trades card list — for the right rail sidebar. */
 export function CompactTradeHistoryList({ accountId }: { accountId?: string | null }) {
   const { data, isLoading } = useQuery({
     queryKey: ['options', 'history', accountId, 25],

@@ -1,5 +1,6 @@
 import axios, { AxiosError } from 'axios';
 import { API_URL } from './constants';
+import { deviceId } from './device';
 
 export interface Envelope<T> { success: boolean; data: T; error: { code: string; message: string; details?: unknown } | null }
 
@@ -54,7 +55,7 @@ export function getAccessToken(): string | null { return accessToken; }
 let inflight: Promise<string> | null = null;
 export function refreshAccess(): Promise<string> {
   inflight ??= axios
-    .post<Envelope<{ accessToken: string }>>(`${API_URL}/api/v1/auth/refresh`, legacyRefresh ? { refreshToken: legacyRefresh } : {}, { withCredentials: true })
+    .post<Envelope<{ accessToken: string }>>(`${API_URL}/api/v1/auth/refresh`, legacyRefresh ? { refreshToken: legacyRefresh } : {}, { withCredentials: true, headers: { 'X-Device-Id': deviceId() } })
     .then(({ data }) => {
       accessToken = data.data.accessToken;
       legacyRefresh = null;
@@ -66,6 +67,7 @@ export function refreshAccess(): Promise<string> {
 
 api.interceptors.request.use((cfg) => {
   if (accessToken) cfg.headers.Authorization = `Bearer ${accessToken}`;
+  cfg.headers['X-Device-Id'] = deviceId();
   return cfg;
 });
 

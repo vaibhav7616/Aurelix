@@ -24,7 +24,7 @@ Auth: `Authorization: Bearer <accessToken>` (15m) + refresh rotation. Orders acc
 - `GET /ticks?symbols=BTC/USD,ETH/USD` · `GET /tick/:symbol` · `GET /candles?symbol&timeframe&limit` (timeframes: 1m 5m 15m **30m** 1h 4h 1d)
 - `GET /stats?symbol=` — live bid/ask/mid/spread + 24h change, high/low, volume
 
-## Options `/options` — fixed-time (Quotex-style) trades (auth)
+## Options `/options` — fixed-time trades (auth)
 - `GET /config` → {durations, minDurationSec, maxDurationSec, serverTime, assets:[{symbol,payoutPct,minStake,maxStake,enabled}]}
 - `POST /` {accountId,symbol,direction:UP|DOWN,stake,durationSec 5..14400} + `Idempotency-Key` (rate-limited)
   → 201 option + `balance` (replay → 200 with `replayed:true`). Stake is debited immediately; entry = server mid at click.
@@ -77,3 +77,11 @@ Auth: `Authorization: Bearer <accessToken>` (15m) + refresh rotation. Orders acc
 `VALIDATION_ERROR UNAUTHORIZED FORBIDDEN NOT_FOUND CONFLICT INSUFFICIENT_BALANCE MAX_ORDER_SIZE
 MAX_POSITION_SIZE MAX_OPEN_POSITIONS MAX_DAILY_LOSS MAX_TOTAL_LOSS TRADING_DISABLED ASSET_DISABLED
 ACCOUNT_SUSPENDED USER_SUSPENDED INVALID_AMOUNT INVALID_JSON LIVE_TRADING_DISABLED RATE_LIMITED INTERNAL_ERROR`
+
+## Affiliate Center (`/api/v1/affiliate`, bearer auth; partner pages at `/affiliate/*`, sign-in at `/affiliate/login`)
+- `GET /me`, `POST /apply`, `GET /programs`, `PUT /payout-details`, `GET /payouts`
+- `GET /dashboard?from&to&by=day|week|month` → totals (clicks, registrations, FTD count/sum, deposits count/sum), `withdrawals` {count,sum} of referred traders, `chart` buckets, `allTime` {total, revenue, volume, cpa, sub}
+- `GET /stats?from&to&linkId&subId` → daily rows · `GET /stats/by?dim=links|countries&from&to` · `GET /traders`
+- `GET|POST /links`, `PATCH /links/:id` — every partner gets default links per allowed model (Main page, Register link, Markets page); each link has a public numeric id `num` used as `?lid=`
+- `GET|POST /postbacks`, `PATCH|DELETE /postbacks/:id`, `POST /postbacks/:id/test` — body `{url, method: GET|POST, events: [reg|conf|ftd|dep|withdrawal], statusMap?: {event: name}}`; macros `{status} {click_id} {event_id} {site_id} {lid} {trader_id} {sumdep}`; POST also sends them as JSON
+- Public: `POST /api/v1/public/aff-click` `{code | lid, sub?, clickId?}` — records a click (country from `CF-IPCountry`/`X-Country-Code`) and returns the attribution code. Any public page opened with `?lid=N[&sub=][&click_id=]` calls it automatically.

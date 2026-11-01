@@ -105,7 +105,7 @@ function AssetTabs({ onOpenSelector }: { onOpenSelector: () => void }) {
   );
 }
 
-/** Quotex Asset Selector Modal */
+/** Asset selector modal */
 function AssetSelectorModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const { addTab } = useTerminal(useShallow((s) => ({ addTab: s.addTab })));
   const [q, setQ] = useState('');
@@ -209,7 +209,7 @@ function AssetSelectorModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
   );
 }
 
-/** Quotex "Trades" panel: Opened (pending + running) and Closed tabs. */
+/** "Trades" panel: Opened (pending + running) and Closed tabs. */
 function TradesPanel({ onClose }: { onClose?: () => void }) {
   const { accountId } = useTerminal(useShallow((s) => ({ accountId: s.accountId })));
   const [tab, setTab] = useState<'open' | 'closed'>('open');

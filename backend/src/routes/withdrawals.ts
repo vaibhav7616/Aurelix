@@ -7,6 +7,10 @@ import { withdrawalSchema } from '../schemas/wallet';
 import { notify } from '../services/notificationService';
 import { audit } from '../services/auditService';
 import { emitToUser } from '../websocket/socketServer';
+import { lockedBonus, forfeitBonuses } from '../promotions/bonusService';
+import { Err } from '../utils/errors';
+import { env } from '../config/env';
+import { checkTraderPayment } from '../affiliate/service';
 
 const r = Router();
 r.use(requireAuth);
@@ -21,16 +25,17 @@ r.get('/', ah(async (req: AuthedRequest, res) => {
 }));
 
 r.post('/', validateBody(withdrawalSchema), ah(async (req: AuthedRequest, res) => {
-  const { accountId, amount, method, details } = req.body as {
+  const { accountId, amount, method, details, forfeitBonus } = req.body as {
     accountId: string;
     amount: number;
     method: string;
     details?: Record<string, unknown>;
+    forfeitBonus?: boolean;
   };
 
   const parsedAmount = parseFloat(String(amount));
-  if (!Number.isFinite(parsedAmount) || parsedAmount < 10) {
-    res.status(400).json({ success: false, data: null, error: { code: 'MIN_WITHDRAWAL', message: 'Minimum withdrawal amount is $10.00' } });
+  if (!Number.isFinite(parsedAmount) || parsedAmount < env.MIN_WITHDRAWAL_USD) {
+    res.status(400).json({ success: false, data: null, error: { code: 'MIN_WITHDRAWAL', message: `Minimum withdrawal amount is $${env.MIN_WITHDRAWAL_USD.toFixed(2)}` } });
     return;
   }
 
@@ -49,7 +54,17 @@ r.post('/', validateBody(withdrawalSchema), ah(async (req: AuthedRequest, res) =
   // parallel requests (or a trade opening at the same time) can never reserve more than is there.
   const result = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Account" WHERE id = ${acct.id} FOR UPDATE`;
-    const fresh = await tx.account.findUniqueOrThrow({ where: { id: acct.id } });
+    let fresh = await tx.account.findUniqueOrThrow({ where: { id: acct.id } });
+    // bonus money is locked until its turnover is done; taking it out early forfeits the bonus
+    const bonusLocked = await lockedBonus(tx, acct.id);
+    const withdrawable = Math.max(0, Number(fresh.balance) - Number(fresh.lockedBalance) - bonusLocked);
+    if (parsedAmount > withdrawable && bonusLocked > 0) {
+      if (!forfeitBonus) return { bonusBlocked: { withdrawable, bonusLocked } };
+      await forfeitBonuses(tx, acct.id);
+      fresh = await tx.account.findUniqueOrThrow({ where: { id: acct.id } });
+      // still not enough after forfeiting: throw so the whole transaction (incl. the forfeit) rolls back
+      if (parsedAmount > Number(fresh.balance) - Number(fresh.lockedBalance)) throw Err.insufficientBalance();
+    }
     const available = Number(fresh.balance) - Number(fresh.lockedBalance);
     if (parsedAmount > available) return { available };
     const locked = await tx.account.update({ where: { id: acct.id }, data: { lockedBalance: { increment: parsedAmount } } });
@@ -66,6 +81,19 @@ r.post('/', validateBody(withdrawalSchema), ah(async (req: AuthedRequest, res) =
     });
     return { w: created, updatedLocked: Number(locked.lockedBalance), balance: Number(locked.balance) };
   });
+  if ('bonusBlocked' in result && result.bonusBlocked) {
+    const { withdrawable, bonusLocked } = result.bonusBlocked;
+    res.status(422).json({
+      success: false,
+      data: null,
+      error: {
+        code: 'BONUS_LOCKED',
+        message: `$${bonusLocked.toFixed(2)} of your balance is an active bonus that unlocks after the trading turnover. You can withdraw up to $${withdrawable.toFixed(2)} now, or withdraw more and forfeit the bonus.`,
+        details: { withdrawable, bonusLocked },
+      },
+    });
+    return;
+  }
   if (!('w' in result) || !result.w) {
     res.status(422).json({
       success: false,
@@ -82,6 +110,7 @@ r.post('/', validateBody(withdrawalSchema), ah(async (req: AuthedRequest, res) =
     lockedBalance: updatedLocked,
   });
 
+  void checkTraderPayment(req.userId!, details); // affiliate fraud check: trader paying out to the partner's account
   await notify({
     userId: req.userId!,
     type: 'WITHDRAWAL',

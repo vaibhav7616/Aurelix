@@ -1,4 +1,4 @@
-// PendingEngine — Quotex "pending trade / execution by price".
+// PendingEngine — "pending trade / execution by price".
 //
 //   create : validates like a normal trade, reserves the stake in Account.lockedBalance
 //            (so it can't be spent twice) and remembers which side of the market the

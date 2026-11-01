@@ -17,7 +17,7 @@ r.use(requireAuth);
 r.get('/', ah(async (req: AuthedRequest, res) => {
   let accounts = await prisma.account.findMany({ where: { userId: req.userId! }, orderBy: { createdAt: 'asc' } });
 
-  // Auto-provision both DEMO and LIVE accounts if either is missing (Quotex parity)
+  // Auto-provision both DEMO and LIVE accounts if either is missing
   const hasDemo = accounts.some((a) => a.accountType === 'DEMO');
   const hasLive = accounts.some((a) => a.accountType === 'LIVE');
 
@@ -79,7 +79,7 @@ r.post('/', ah(async (req: AuthedRequest, res) => {
   res.status(201).json({ success: true, data: acct, error: null });
 }));
 
-// Reset demo account balance back to default $10,000 (Quotex reload feature)
+// Reset demo account balance back to default $10,000
 r.post('/:id/reset-demo', ah(async (req: AuthedRequest, res) => {
   const acct = await prisma.account.findFirst({ where: { id: req.params.id, userId: req.userId! } });
   if (!acct) { res.status(404).json({ success: false, data: null, error: { code: 'NOT_FOUND', message: 'Account not found' } }); return; }
@@ -98,7 +98,7 @@ r.post('/:id/reset-demo', ah(async (req: AuthedRequest, res) => {
   res.json({ success: true, data: { ...updated, balance: Number(updated.balance) }, error: null });
 }));
 
-// Refill a DEMO account back to the starting balance (Quotex "Top up demo balance").
+// Refill a DEMO account back to the starting balance ("Top up demo balance").
 // Stake reserved by pending trades stays reserved: target = starting balance + lockedBalance.
 r.post('/:id/refill', ah(async (req: AuthedRequest, res) => {
   const acct = await prisma.account.findFirst({ where: { id: req.params.id, userId: req.userId! } });

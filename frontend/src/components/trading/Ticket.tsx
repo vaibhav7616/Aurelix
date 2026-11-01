@@ -93,10 +93,10 @@ export function Ticket() {
   const leadRef = useRef(leadSec);
   leadRef.current = leadSec;
 
-  // Expiry mode (Quotex "SWITCH TIME"): TIMER = duration from open, TIME = fixed clock minute
+  // Expiry mode ("SWITCH TIME"): TIMER = duration from open, TIME = fixed clock minute
   const [mode, setMode] = useState<ExpiryMode>(() => (localStorage.getItem('ax_opt_mode') === 'TIME' ? 'TIME' : 'TIMER'));
   const [fixedExpiry, setFixedExpiry] = useState<number>(() => nextFixedExpiry(serverNow()));
-  // purchases for a minute close leadSec before it — roll forward like Quotex does
+  // purchases for a minute close leadSec before it — roll forward to the next minute
   useEffect(() => {
     if (mode !== 'TIME') return;
     const t = setInterval(() => {
@@ -203,7 +203,7 @@ export function Ticket() {
   const shiftTime = (dir: 1 | -1) => { soundService.playClick(); if (mode === 'TIME') shiftFixed(dir); else setDurationSec((d) => nextPreset(d, dir)); };
   const shiftStake = (dir: 1 | -1) => { soundService.playClick(); if (stakeMode === 'PCT') setStakePct((p) => stepPct(p, dir)); else setStake((s) => stepStake(s, dir)); };
 
-  // Quotex hotkeys: Shift+W up · Shift+S down · Shift+A/D investment −/+ · Shift+Q/E time −/+
+  // Hotkeys: Shift+W up · Shift+S down · Shift+A/D investment −/+ · Shift+Q/E time −/+
   const keyRef = useRef({ submit, shiftTime, shiftStake });
   keyRef.current = { submit, shiftTime, shiftStake };
   useEffect(() => {
@@ -435,7 +435,7 @@ export function Ticket() {
         <FieldError message={err} />
       </div>
 
-      {/* UP · payout · DOWN (Quotex order) */}
+      {/* UP · payout · DOWN  */}
       <div className="shrink-0 px-4 pt-2 pb-4 space-y-2">
         {/* 1-Click Disabled Confirmation Card */}
         {confirmDir && (

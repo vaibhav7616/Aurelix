@@ -9,6 +9,8 @@ export const withdrawalSchema = z.object({
   amount: z.number().positive().max(10_000_000),
   method: z.string().default('bank'),
   details: z.record(z.unknown()).optional(),
+  /** the user agreed to forfeit an active bonus to withdraw money it locks */
+  forfeitBonus: z.boolean().optional(),
 });
 export const adjustSchema = z.object({
   accountId: z.string().min(1),

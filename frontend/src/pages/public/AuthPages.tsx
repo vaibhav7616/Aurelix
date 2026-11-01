@@ -167,7 +167,7 @@ export function RegisterPage() {
   const register = useAuth((s) => s.register);
   const login = useAuth((s) => s.login);
   const push = useUI((s) => s.push);
-  const [f, setF] = useState({ email: '', password: '', firstName: '', lastName: '' });
+  const [f, setF] = useState({ email: '', password: '', firstName: '', lastName: '', promo: '' });
   const [ack, setAck] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -178,7 +178,7 @@ export function RegisterPage() {
     if (!ack) { setErr('Please acknowledge the risk notice to continue.'); return; }
     setBusy(true); setErr(null);
     try {
-      await register(f);
+      await register({ ...f, promo: f.promo.trim() || undefined });
       await login(f.email.trim(), f.password, true);
       push('ok', 'Account created — welcome to Aurelix.');
       nav('/trading');
@@ -189,16 +189,17 @@ export function RegisterPage() {
   return (
     <Shell footer={<span className="text-xs text-mute">Already have an account? <Link to="/login" className="text-accent-300 font-semibold hover:underline">Log in</Link></span>}>
       <form onSubmit={submit} className="space-y-3.5">
-        <div><h1 className="text-lg font-bold tracking-tight">Create account</h1><p className="text-xs text-mute mt-0.5">Instant $10,000 starting balance. No card required.</p></div>
+        <div><h1 className="text-lg font-bold tracking-tight">Create account</h1><p className="text-xs text-mute mt-0.5">Free $10,000 demo balance to practise. No card required.</p></div>
         <div className="grid grid-cols-2 gap-2.5">
           <div><label className="ax-label">First name</label><input className="ax-input" value={f.firstName} onChange={set('firstName')} required /></div>
           <div><label className="ax-label">Last name</label><input className="ax-input" value={f.lastName} onChange={set('lastName')} required /></div>
         </div>
         <div><label className="ax-label">Email</label><input className="ax-input" type="email" autoComplete="email" value={f.email} onChange={set('email')} placeholder="you@example.com" required /></div>
         <div><label className="ax-label">Password <span className="normal-case font-normal text-mute">(8+ characters)</span></label><input className="ax-input" type="password" autoComplete="new-password" minLength={8} value={f.password} onChange={set('password')} placeholder="••••••••" required /></div>
+        <div><label className="ax-label">Partner code <span className="normal-case font-normal text-mute">(optional)</span></label><input className="ax-input" value={f.promo} onChange={(e) => setF({ ...f, promo: e.target.value.replace(/[^A-Za-z0-9]/g, '').slice(0, 16) })} placeholder="If a partner gave you a code" autoComplete="off" /></div>
         <label className="flex gap-2.5 text-[11px] text-fog leading-relaxed cursor-pointer bg-white/[0.04] border border-line rounded-md p-2.5">
           <input type="checkbox" className="ax-check mt-[1px] shrink-0" checked={ack} onChange={(e) => setAck(e.target.checked)} />
-          I understand that trading involves substantial risk of loss.
+          <span>I understand that trading involves substantial risk of loss and I have read the <Link to="/risk" target="_blank" className="text-accent-300 hover:underline">risk disclosure</Link>.</span>
         </label>
         <FieldError message={err} />
         <button className="ax-btn-primary w-full !h-10" disabled={busy}>{busy ? 'Creating account…' : 'Create free account'}</button>

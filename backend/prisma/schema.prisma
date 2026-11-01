@@ -65,6 +65,14 @@ enum TxnType {
   FEE
   REFUND
   ADJUSTMENT
+  BONUS
+  REFERRAL
+}
+
+enum BonusStatus {
+  ACTIVE
+  COMPLETED
+  FORFEITED
 }
 
 enum DepositStatus {
@@ -122,15 +130,19 @@ model User {
   role          UserRole   @default(USER)
   status        UserStatus @default(PENDING_VERIFICATION)
   emailVerified Boolean    @default(false)
+  /// ISO country from the edge proxy at registration (affiliate CPA rates / restrictions)
+  country       String?
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
-  sessions      Session[]
-  accounts      Account[]
-  notifications Notification[]
-  auditLogs     AuditLog[]     @relation("ActorLogs")
-  withdrawals   Withdrawal[]   @relation("UserWithdrawals")
-  deposits      Deposit[]
+  sessions          Session[]
+  accounts          Account[]
+  notifications     Notification[]
+  auditLogs         AuditLog[]         @relation("ActorLogs")
+  withdrawals       Withdrawal[]       @relation("UserWithdrawals")
+  deposits          Deposit[]
+  affiliate         Affiliate?         @relation("AffiliateOwner")
+  affiliateReferral AffiliateReferral? @relation("AffiliateTrader")
 
   @@index([email])
   @@index([username])
@@ -150,10 +162,13 @@ model Session {
   rotatedAt    DateTime?
   /// "remember me": the refresh cookie survives a browser restart
   persistent   Boolean   @default(true)
+  /// random per-browser id (X-Device-Id) — affiliate fraud checks only
+  deviceId     String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([deviceId])
 }
 
 model Account {
@@ -193,7 +208,7 @@ model Asset {
   minOrder     Decimal       @default(1) @db.Decimal(18, 2)
   maxOrder     Decimal       @default(100000) @db.Decimal(18, 2)
   pipSize      Decimal       @default(0.01) @db.Decimal(18, 6)
-  payoutPct    Int           @default(80) // binary option payout % of stake on a win (Quotex-style)
+  payoutPct    Int           @default(80) // binary option payout % of stake on a win
   tradingHours String        @default("24x7")
   sortOrder    Int           @default(0)
   createdAt    DateTime      @default(now())
@@ -305,7 +320,7 @@ model Trade {
   @@index([closedAt])
 }
 
-/// Fixed-time (binary) option — the Quotex-style product. Stake is debited on open;
+/// Fixed-time (binary) option — the main product. Stake is debited on open;
 /// at expiry the server compares the close price to the entry price and credits
 /// stake + payout (WON), returns the stake (TIE) or nothing (LOST).
 model BinaryOption {
@@ -339,7 +354,7 @@ model BinaryOption {
   @@index([openedAt])
 }
 
-/// Pending trade (Quotex "Execution by price"): the stake is reserved in
+/// Pending trade ("Execution by price"): the stake is reserved in
 /// Account.lockedBalance; when the quote reaches targetPrice the server opens a
 /// regular BinaryOption for durationSec at the market price.
 model PendingOption {
@@ -396,6 +411,9 @@ model Deposit {
   providerRef String?
   /// UTR / transaction hash / bank reference the user submitted — unique, so one payment can't back two deposits
   proofRef    String?       @unique
+  /// promo bonus % accepted when the deposit was created; granted when an admin approves it
+  bonusPct    Int           @default(0)
+  promoCode   String?
   status      DepositStatus @default(PENDING)
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
@@ -510,4 +528,242 @@ model IdempotencyKey {
   expiresAt DateTime
 
   @@index([userId])
+}
+
+/// Deposit bonus: credited to the live balance, locked from withdrawal until the trading
+/// turnover requirement is met; withdrawing into it early forfeits it.
+model Bonus {
+  id               String      @id @default(cuid())
+  userId           String
+  accountId        String
+  depositId        String?     @unique
+  code             String?
+  amount           Decimal     @db.Decimal(18, 2)
+  turnoverRequired Decimal     @db.Decimal(18, 2)
+  turnoverDone     Decimal     @default(0) @db.Decimal(18, 2)
+  status           BonusStatus @default(ACTIVE)
+  createdAt        DateTime    @default(now())
+  closedAt         DateTime?
+
+  @@index([accountId, status])
+  @@index([userId])
+}
+
+// ── Affiliate programme ───────────────────────────────────────────────────────────────
+
+enum AffiliateStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  BLOCKED
+}
+
+enum AffiliateModel {
+  REVSHARE
+  TURNOVER
+  CPA
+}
+
+/// A partner who brings traders. One per user; approved and verified by an admin.
+model Affiliate {
+  id             String               @id @default(cuid())
+  userId         String               @unique
+  user           User                 @relation("AffiliateOwner", fields: [userId], references: [id], onDelete: Cascade)
+  status         AffiliateStatus      @default(PENDING)
+  verified       Boolean              @default(false)
+  country        String?
+  trafficSources String
+  payoutMethod   String?
+  payoutDetails  Json?
+  /// who invited this affiliate (sub-affiliate programme)
+  parentId       String?
+  parent         Affiliate?           @relation("SubAffiliates", fields: [parentId], references: [id], onDelete: SetNull)
+  /// code for inviting other affiliates
+  subCode        String               @unique
+  telegramChatId String?
+  telegramCode   String?              @unique
+  note           String?
+  approvedAt     DateTime?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  children       Affiliate[]          @relation("SubAffiliates")
+  links          AffiliateLink[]
+  promoCodes     AffiliatePromoCode[]
+  referrals      AffiliateReferral[]
+  ledger         AffiliateLedger[]
+  payouts        AffiliatePayout[]
+  postbacks      AffiliatePostback[]
+  tickets        AffiliateTicket[]
+
+  @@index([parentId])
+  @@index([status])
+}
+
+/// Tracking link: fixes the commission model for traders who register through it.
+model AffiliateLink {
+  id          String              @id @default(cuid())
+  /// public numeric link id (?lid=123456)
+  num         Int                 @unique @default(autoincrement())
+  affiliateId String
+  affiliate   Affiliate           @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  code        String              @unique
+  name        String
+  model       AffiliateModel
+  subId       String?
+  landing     String              @default("/")
+  archived    Boolean             @default(false)
+  createdAt   DateTime            @default(now())
+  clicks      AffiliateClick[]
+  referrals   AffiliateReferral[]
+
+  @@index([affiliateId])
+}
+
+model AffiliateClick {
+  id        String        @id @default(cuid())
+  linkId    String
+  link      AffiliateLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  subId     String?
+  clickId   String?
+  ipHash    String?
+  country   String?
+  createdAt DateTime      @default(now())
+
+  @@index([linkId, createdAt])
+}
+
+model AffiliatePromoCode {
+  id          String         @id @default(cuid())
+  affiliateId String
+  affiliate   Affiliate      @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  code        String         @unique
+  model       AffiliateModel
+  createdAt   DateTime       @default(now())
+
+  @@index([affiliateId])
+}
+
+/// A trader brought by an affiliate. Model and share are fixed at registration, permanently.
+model AffiliateReferral {
+  id                 String            @id @default(cuid())
+  userId             String            @unique
+  user               User              @relation("AffiliateTrader", fields: [userId], references: [id], onDelete: Cascade)
+  affiliateId        String
+  affiliate          Affiliate         @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  linkId             String?
+  link               AffiliateLink?    @relation(fields: [linkId], references: [id], onDelete: SetNull)
+  promoCodeId        String?
+  model              AffiliateModel
+  level              Int
+  /// RevShare % or Turnover % from the affiliate's level at registration time
+  sharePct           Decimal           @db.Decimal(6, 2)
+  subId              String?
+  clickId            String?
+  /// SUSPICIOUS: fraud checks matched — commission is held for admin review
+  status             String            @default("ACTIVE")
+  flags              String?
+  registeredAt       DateTime          @default(now())
+  ftdAt              DateTime?
+  ftdAmount          Decimal?          @db.Decimal(18, 2)
+  depositTotal       Decimal           @default(0) @db.Decimal(18, 2)
+  activeTraderAt     DateTime?
+  cpaAt              DateTime?
+  turnoverCommission Decimal           @default(0) @db.Decimal(18, 2)
+  ledger             AffiliateLedger[]
+
+  @@index([affiliateId, registeredAt])
+}
+
+/// Every commission movement. Balance = sum of ACCRUED rows (payouts are negative rows).
+model AffiliateLedger {
+  id          String             @id @default(cuid())
+  affiliateId String
+  affiliate   Affiliate          @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  /// REVSHARE | TURNOVER | CPA | SUBAFFILIATE | PAYOUT | PAYOUT_REVERSAL | ADJUSTMENT
+  type        String
+  amount      Decimal            @db.Decimal(18, 2)
+  /// ACCRUED | HELD | CANCELLED
+  status      String             @default("ACCRUED")
+  uniqueKey   String             @unique
+  referralId  String?
+  referral    AffiliateReferral? @relation(fields: [referralId], references: [id], onDelete: SetNull)
+  refId       String?
+  note        String?
+  createdAt   DateTime           @default(now())
+
+  @@index([affiliateId, status, createdAt])
+  @@index([referralId])
+}
+
+model AffiliatePayout {
+  id          String    @id @default(cuid())
+  affiliateId String
+  affiliate   Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  amount      Decimal   @db.Decimal(18, 2)
+  /// REQUESTED | PAID | REJECTED
+  status      String    @default("REQUESTED")
+  periodEnd   DateTime
+  method      String?
+  details     Json?
+  note        String?
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
+
+  @@index([affiliateId])
+  @@index([status])
+}
+
+model AffiliatePostback {
+  id          String                 @id @default(cuid())
+  affiliateId String
+  affiliate   Affiliate              @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  /// which events this postback receives: reg | conf | ftd | dep | withdrawal
+  events      String[]
+  /// GET (parameters in the URL) or POST (parameters in a JSON body)
+  method      String                 @default("GET")
+  /// tracker names for each event's {status}, e.g. {"ftd":"sale"}
+  statusMap   Json?
+  url         String
+  active      Boolean                @default(true)
+  createdAt   DateTime               @default(now())
+  logs        AffiliatePostbackLog[]
+
+  @@index([affiliateId])
+}
+
+model AffiliatePostbackLog {
+  id         String            @id @default(cuid())
+  postbackId String
+  postback   AffiliatePostback @relation(fields: [postbackId], references: [id], onDelete: Cascade)
+  url        String
+  status     Int?
+  error      String?
+  createdAt  DateTime          @default(now())
+
+  @@index([postbackId, createdAt])
+}
+
+model AffiliateTicket {
+  id          String                   @id @default(cuid())
+  affiliateId String
+  affiliate   Affiliate                @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  subject     String
+  /// OPEN | ANSWERED | CLOSED
+  status      String                   @default("OPEN")
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
+  messages    AffiliateTicketMessage[]
+
+  @@index([affiliateId])
+}
+
+model AffiliateTicketMessage {
+  id        String          @id @default(cuid())
+  ticketId  String
+  ticket    AffiliateTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  fromAdmin Boolean         @default(false)
+  body      String
+  createdAt DateTime        @default(now())
+
+  @@index([ticketId])
 }

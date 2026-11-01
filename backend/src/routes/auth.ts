@@ -13,11 +13,16 @@ import { env } from '../config/env';
 import { accountNumber } from '../trading/executionEngine';
 import { loginIpLimiter, loginAccountLimiter } from '../middleware/rateLimit';
 import { hashToken } from '../utils/tokenHash';
+import { attributeRegistration } from '../affiliate/service';
+import { deviceIdOf } from '../utils/device';
 
 const r = Router();
 
 r.post('/register', loginIpLimiter, validateBody(registerSchema), ah(async (req, res) => {
-  const { email, password, firstName, lastName } = req.body as { email: string; password: string; firstName: string; lastName: string };
+  const { email, password, firstName, lastName, aff, promo, sub, clickId } = req.body as { email: string; password: string; firstName: string; lastName: string; aff?: string; promo?: string; sub?: string; clickId?: string };
+  // country from the edge proxy / CDN when present (used for affiliate CPA rates)
+  const countryHdr = String(req.headers['cf-ipcountry'] ?? req.headers['x-country-code'] ?? '').toUpperCase();
+  const country = /^[A-Z]{2}$/.test(countryHdr) && countryHdr !== 'XX' ? countryHdr : null;
   const exists = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
   if (exists) throw Err.conflict('Email already registered');
   const base = (email.split('@')[0] ?? 'trader').toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 24) || 'trader';
@@ -26,10 +31,10 @@ r.post('/register', loginIpLimiter, validateBody(registerSchema), ah(async (req,
   const user = await prisma.user.create({
     data: {
       email: email.toLowerCase(), username, passwordHash: await hashPassword(password),
-      firstName, lastName, status: 'ACTIVE', emailVerified: true,
+      firstName, lastName, status: 'ACTIVE', emailVerified: true, country,
     },
   });
-  // Auto-create DEMO trading account ($10,000) and LIVE real account ($0.00) (Quotex parity)
+  // Auto-create DEMO trading account ($10,000) and LIVE real account ($0.00)
   const acct = await prisma.account.create({
     data: { userId: user.id, accountNumber: accountNumber(), accountType: 'DEMO', currency: 'USD', balance: env.DEMO_STARTING_BALANCE, status: 'ACTIVE' },
   });
@@ -39,6 +44,7 @@ r.post('/register', loginIpLimiter, validateBody(registerSchema), ah(async (req,
   await prisma.account.create({
     data: { userId: user.id, accountNumber: accountNumber().replace('DEMO', 'REAL'), accountType: 'LIVE', currency: 'USD', balance: 0.00, status: 'ACTIVE' },
   });
+  await attributeRegistration(user.id, { aff, promo, sub, clickId }, req.ip, deviceIdOf(req));
   await audit({ actorId: user.id, action: 'USER_REGISTER', entityType: 'User', entityId: user.id, ipAddress: req.ip, userAgent: req.headers['user-agent'] });
   res.status(201).json({ success: true, data: { id: user.id, email: user.email }, error: null });
 }));
@@ -61,7 +67,7 @@ function clearRefreshCookie(req: Request, res: Response) {
 async function createSession(req: Request, userId: string, persistent: boolean): Promise<string> {
   const token = signRefresh({ sub: userId, sid: randomUUID() });
   await prisma.session.create({
-    data: { userId, refreshToken: hashToken(token), persistent, userAgent: String(req.headers['user-agent'] ?? '').slice(0, 255), ipAddress: req.ip ?? null, expiresAt: new Date(Date.now() + SESSION_MS) },
+    data: { userId, refreshToken: hashToken(token), persistent, deviceId: deviceIdOf(req), userAgent: String(req.headers['user-agent'] ?? '').slice(0, 255), ipAddress: req.ip ?? null, expiresAt: new Date(Date.now() + SESSION_MS) },
   });
   return token;
 }

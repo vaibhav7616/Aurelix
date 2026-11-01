@@ -13,6 +13,10 @@ import { emitToUser } from '../websocket/socketServer';
 import { parsePage, pageMeta } from '../utils/pagination';
 import { Err } from '../utils/errors';
 import { PAYOUT_RULES_KEY } from '../trading/payout';
+import { grantDepositBonus } from '../promotions/bonusService';
+import { getPromoConfig, BONUS_KEY, parseBonusConfig } from '../promotions/config';
+import { onDepositApproved, onTraderWithdrawalCompleted } from '../affiliate/service';
+import { AFFILIATE_KEY } from '../affiliate/config';
 
 const r = Router();
 r.use(requireAuth, requireAdmin);
@@ -146,6 +150,7 @@ r.post('/withdrawals/:id/review', validateBody(reviewWithdrawalSchema), ah(async
     return true;
   });
   if (!ok) { res.status(409).json({ success: false, data: null, error: { code: 'INVALID_STATUS', message: `A ${w.status.toLowerCase()} withdrawal cannot be ${next.toLowerCase()}` } }); return; }
+  if (next === 'COMPLETED') void onTraderWithdrawalCompleted(w.userId, w.id, Number(w.amount)).catch(() => undefined);
   await notify({ userId: w.userId, type: 'WITHDRAWAL', title: `Withdrawal ${next.toLowerCase()}`, message: `${w.amount} — ${note ?? next}` });
   await audit({ actorId: req.userId, action: `WITHDRAWAL_${next}`, entityType: 'Withdrawal', entityId: w.id, metadata: { note } });
   const updated = await prisma.withdrawal.findUnique({ where: { id: w.id } });
@@ -232,12 +237,15 @@ r.post('/deposits/:id/approve', ah(async (req: AuthedRequest, res) => {
     await tx.walletTransaction.create({
       data: { accountId: acct.id, type: 'DEPOSIT', amount, balanceAfter: newBal, reference: dep.proofRef ?? dep.providerRef, memo: `Deposit verified by admin (${dep.provider}${dep.proofRef ? `, ref ${dep.proofRef}` : ''})` },
     });
+    // promo bonus accepted at deposit time (locked until turnover — see promotions/bonusService)
+    const bonus = await grantDepositBonus(tx, dep, (await getPromoConfig()).bonus.turnoverMultiple);
+    await onDepositApproved(tx, dep);
     const completed = await tx.deposit.findUniqueOrThrow({ where: { id: dep.id } });
-    return { newBal, completed };
+    return { newBal: newBal + bonus, completed, bonus };
   });
   if (!out) { res.status(409).json({ success: false, data: null, error: { code: 'INVALID_STATUS', message: 'Only pending deposits can be approved' } }); return; }
   emitToUser(dep.userId, 'balance:updated', { accountId: dep.accountId, balance: out.newBal });
-  await notify({ userId: dep.userId, type: 'DEPOSIT', title: 'Deposit approved!', message: `+$${amount.toFixed(2)} USD credited to your account.` });
+  await notify({ userId: dep.userId, type: 'DEPOSIT', title: 'Deposit approved!', message: `+$${amount.toFixed(2)} USD credited to your account.${out.bonus ? ` Bonus +$${out.bonus.toFixed(2)} added (withdrawable after the trading turnover is completed).` : ''}` });
   await audit({ actorId: req.userId, action: 'DEPOSIT_APPROVE', entityType: 'Deposit', entityId: dep.id, metadata: { amount } });
   res.json({ success: true, data: out.completed, error: null });
 }));
@@ -298,6 +306,13 @@ r.put('/settings', ah(async (req: AuthedRequest, res) => {
   const body = (req.body ?? {}) as Record<string, string>;
   if (Object.keys(body).some((k) => k.startsWith('deposit.'))) {
     throw Err.validation('Deposit payment details are set in the server .env (DEPOSIT_* variables), not in the database');
+  }
+  if (typeof body[AFFILIATE_KEY] === 'string') {
+    try { JSON.parse(body[AFFILIATE_KEY]); } catch { throw Err.validation(`${AFFILIATE_KEY} must be valid JSON`); }
+  }
+  if (typeof body[BONUS_KEY] === 'string') {
+    try { JSON.parse(body[BONUS_KEY]); } catch { throw Err.validation(`${BONUS_KEY} must be valid JSON`); }
+    parseBonusConfig(body[BONUS_KEY]);
   }
   if (typeof body[PAYOUT_RULES_KEY] === 'string') {
     try { JSON.parse(body[PAYOUT_RULES_KEY]); } catch { throw Err.validation(`${PAYOUT_RULES_KEY} must be valid JSON, e.g. {"duration":[{"maxSec":29,"adj":-5}],"otcAdj":-3}`); }

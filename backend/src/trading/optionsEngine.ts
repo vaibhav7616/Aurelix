@@ -1,4 +1,4 @@
-// OptionsEngine — fixed-time (binary) options, Quotex-style.
+// OptionsEngine — fixed-time (binary) options.
 //
 //   open   : stake is debited immediately (ledger TRADE txn), entry price = live mid.
 //   expiry : server compares close price to entry price:
@@ -20,11 +20,13 @@ import { randomUUID } from 'crypto';
 import { env } from '../config/env';
 import { utcDayStart } from '../utils/time';
 import { effectivePayoutPct, getPayoutRules } from './payout';
+import { applyTurnover } from '../promotions/bonusService';
+import { onTradeSettled } from '../affiliate/service';
 
 export const OPTION_DURATIONS_SEC = [5, 10, 15, 30, 60, 120, 180, 300, 600, 900, 1800, 3600] as const;
 export const MIN_DURATION_SEC = 5;
 export const MAX_DURATION_SEC = 4 * 3600;
-/** "Time" mode (fixed clock expiry): expiry must be a whole minute at least this far away (Quotex cut-off). */
+/** "Time" mode (fixed clock expiry): expiry must be a whole minute at least this far away (purchase cut-off). */
 export const FIXED_TIME_MIN_LEAD_SEC = 30;
 
 export type Direction = 'UP' | 'DOWN';
@@ -256,7 +258,7 @@ export async function openOption(input: OpenOptionInput) {
 }
 
 /**
- * "Time" mode rules (Quotex): the trade closes at a whole minute on the clock, purchases for a
+ * "Time" mode rules: the trade closes at a whole minute on the clock, purchases for a
  * given minute close FIXED_TIME_MIN_LEAD_SEC before it, and the horizon is capped like Timer mode.
  */
 export function validateFixedExpiry(expiresAtMs: number, nowMs: number): void {
@@ -275,7 +277,7 @@ export interface SettleProof { source: SettleSource; quoteAt: Date }
 /** Settle one option at `closePrice`. Idempotent: a second call is a no-op. */
 export async function settleOption(optionId: string, closePrice: number, now = new Date(), proof?: SettleProof) {
   const result = await prisma.$transaction(async (tx) => {
-    const o = await tx.binaryOption.findUnique({ where: { id: optionId }, include: { asset: true } });
+    const o = await tx.binaryOption.findUnique({ where: { id: optionId }, include: { asset: true, account: { select: { accountType: true } } } });
     if (!o || o.status !== 'OPEN') return null;
     const stake = Number(o.stake);
     const entry = Number(o.entryPrice);
@@ -302,6 +304,11 @@ export async function settleOption(optionId: string, closePrice: number, now = n
       await tx.walletTransaction.create({
         data: { accountId: acct.id, type: 'TRADE', amount: credit, balanceAfter: newBal, reference: o.id, memo: `Option ${outcome} ${o.asset.symbol} · ${outcome === 'WON' ? `+${profit.toFixed(2)} payout` : 'stake returned'}` },
       });
+    }
+    // live trades: count toward bonus turnover, and accrue referral revenue share (same transaction)
+    if (o.account.accountType === 'LIVE' && outcome !== 'TIE') {
+      await applyTurnover(tx, o.accountId, stake, now);
+      await onTradeSettled(tx, { id: o.id, userId: o.userId, accountId: o.accountId, stake, profit, outcome });
     }
     const updated = await tx.binaryOption.findUniqueOrThrow({ where: { id: o.id }, include: { asset: true } });
     return { updated, newBal, outcome, profit, credit };

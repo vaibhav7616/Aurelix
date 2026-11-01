@@ -1,10 +1,10 @@
-// DemoMarketProvider — fixed-time-trade style market feed (Quotex-like behaviour).
+// DemoMarketProvider — fixed-time-trade style market feed .
 // CLEARLY SIMULATED. Never presented as real brokerage prices.
 //
 // Behaviour this provider guarantees (the terminal, the ticket and the settlement
 // engine all rely on it):
 //   • quotes update several times per second (default 250 ms) — the live candle
-//     visibly "breathes" like on Quotex instead of stepping once a second;
+//     visibly "breathes" instead of stepping once a second;
 //   • one price series feeds ALL timeframes: 5s · 10s · 15s · 30s · 1m · 5m · 15m ·
 //     30m · 1h · 4h · 1d — every candle is a strict [open, close) time bucket that
 //     is aligned to the wall clock (a 1m candle always starts at :00);
@@ -17,7 +17,7 @@
 //     chart looks like a real FX/crypto tape and can never run off to zero/∞;
 //   • every quote is rounded to the instrument's pip size (5 decimals for FX,
 //     3 for JPY pairs, 2 for crypto/metals) — exactly like a broker feed, which
-//     also makes ties genuinely possible (Quotex refunds on a tie).
+//     also makes ties genuinely possible (a tie refunds the stake).
 import { env } from '../config/env';
 import { Candle, MarketDataProvider, Tick, orderCandles } from './MarketDataProvider';
 import { prisma } from '../config/database';

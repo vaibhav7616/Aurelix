@@ -8,24 +8,9 @@ import { emitToUser } from '../websocket/socketServer';
 import { getLiveUsdInrRate, getCurrentUsdInrRate } from '../services/exchangeRateService';
 import { depositSettings, availableMethods, normalizeMethod, type DepositMethod } from '../payments/depositMethods';
 import { getProvider } from '../services/marketService';
+import { getPromoConfig } from '../promotions/config';
 
 const r = Router();
-
-export interface PromoRule {
-  code: string;
-  bonusPct: number;
-  minAmount: number;
-  description: string;
-  badge: string;
-}
-
-export const PROMO_RULES: Record<string, PromoRule> = {
-  WELCOME50: { code: 'WELCOME50', bonusPct: 50, minAmount: 15, description: '+50% Welcome Bonus on Trading Capital', badge: '50% BONUS' },
-  BONUS30: { code: 'BONUS30', bonusPct: 30, minAmount: 10, description: '+30% Deposit Booster', badge: '30% BONUS' },
-  START30: { code: 'START30', bonusPct: 30, minAmount: 10, description: '+30% Starter Pack Bonus', badge: '30% BONUS' },
-  VIP100: { code: 'VIP100', bonusPct: 100, minAmount: 100, description: '+100% VIP Capital Match', badge: '100% MATCH' },
-  RISKFREE: { code: 'RISKFREE', bonusPct: 20, minAmount: 25, description: '+20% Deposit Bonus', badge: '20% BONUS' },
-};
 
 // Live exchange rate endpoint (accessible for cashier previews and conversion calculators)
 r.get('/exchange-rate', ah(async (_req, res) => {
@@ -33,52 +18,39 @@ r.get('/exchange-rate', ah(async (_req, res) => {
   res.json({ success: true, data: rateInfo, error: null });
 }));
 
-// Promo code validator for Cashier
+// Promo code validator for the cashier (offers + turnover from promotions/config)
 r.post('/validate-promo', ah(async (req, res) => {
   const { code, amount } = req.body as { code?: string; amount?: number };
   const cleanCode = String(code ?? '').trim().toUpperCase();
   const parsedAmt = Number(amount ?? 0);
-
-  const promo = PROMO_RULES[cleanCode];
-  if (!promo) {
-    res.status(400).json({
-      success: false,
-      data: null,
-      error: { code: 'INVALID_PROMO', message: `Promo code "${cleanCode}" is invalid or expired.` },
-    });
+  const { bonus } = await getPromoConfig();
+  const offer = bonus.offers.find((o) => o.code === cleanCode);
+  if (!offer) {
+    res.status(400).json({ success: false, data: null, error: { code: 'INVALID_PROMO', message: `Promo code "${cleanCode}" is invalid or expired.` } });
     return;
   }
-
-  if (parsedAmt > 0 && parsedAmt < promo.minAmount) {
-    res.status(400).json({
-      success: false,
-      data: null,
-      error: { code: 'MIN_AMOUNT_NOT_MET', message: `Promo code ${promo.code} requires a minimum deposit of $${promo.minAmount.toFixed(2)}.` },
-    });
+  if (parsedAmt > 0 && parsedAmt < offer.minDeposit) {
+    res.status(400).json({ success: false, data: null, error: { code: 'MIN_AMOUNT_NOT_MET', message: `Promo code ${offer.code} requires a minimum deposit of $${offer.minDeposit.toFixed(2)}.` } });
     return;
   }
-
-  const bonusAmount = (parsedAmt * promo.bonusPct) / 100;
-  const totalCapital = parsedAmt + bonusAmount;
-
+  const bonusAmount = Math.round(parsedAmt * offer.bonusPct) / 100;
   res.json({
     success: true,
     data: {
       valid: true,
-      code: promo.code,
-      bonusPct: promo.bonusPct,
-      minAmount: promo.minAmount,
-      description: promo.description,
-      badge: promo.badge,
-      bonusAmount: Math.round(bonusAmount * 100) / 100,
-      totalCapital: Math.round(totalCapital * 100) / 100,
-      turnoverRequired: Math.round(bonusAmount * 35),
+      code: offer.code,
+      bonusPct: offer.bonusPct,
+      minAmount: offer.minDeposit,
+      description: `+${offer.bonusPct}% ${offer.title} — withdrawable after ${bonus.turnoverMultiple}× turnover`,
+      badge: `${offer.bonusPct}% BONUS`,
+      bonusAmount,
+      totalCapital: Math.round((parsedAmt + bonusAmount) * 100) / 100,
+      turnoverRequired: Math.round(bonusAmount * bonus.turnoverMultiple * 100) / 100,
+      turnoverMultiple: bonus.turnoverMultiple,
     },
     error: null,
   });
 }));
-
-r.use(requireAuth);
 
 // Deposit methods that are configured and can be used right now
 r.get('/methods', ah(async (_req, res) => {
@@ -126,17 +98,12 @@ r.post('/create', ah(async (req: AuthedRequest, res) => {
     return;
   }
 
-  // Bonus calculation (using PROMO_RULES or tier bonus)
-  let bonusPct = 0;
+  // Promo bonus: only a valid configured code with its minimum met. Granted when an admin approves.
+  const { bonus: bonusCfg } = await getPromoConfig();
   const cleanCode = promoCode ? promoCode.trim().toUpperCase() : '';
-  if (cleanCode && PROMO_RULES[cleanCode]) {
-    bonusPct = PROMO_RULES[cleanCode].bonusPct;
-  } else if (cleanCode && ['BONUS30', 'START30', 'AURELIX'].includes(cleanCode)) {
-    bonusPct = 30;
-  } else if (parsedAmount >= 100) {
-    bonusPct = 20;
-  }
-  const bonusAmount = (parsedAmount * bonusPct) / 100;
+  const offer = bonusCfg.offers.find((o) => o.code === cleanCode && parsedAmount >= o.minDeposit);
+  const bonusPct = offer?.bonusPct ?? 0;
+  const bonusAmount = Math.round(parsedAmount * bonusPct) / 100;
   const totalCredit = parsedAmount + bonusAmount;
 
   // Generate unique order reference
@@ -221,6 +188,8 @@ r.post('/create', ah(async (req: AuthedRequest, res) => {
       currency: 'USD',
       provider: chosen,
       providerRef: orderRef,
+      bonusPct,
+      promoCode: offer?.code ?? null,
       status: 'PENDING',
     },
   });

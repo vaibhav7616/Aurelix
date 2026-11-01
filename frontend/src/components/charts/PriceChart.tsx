@@ -31,7 +31,7 @@ const FIB_LEVELS = [
   { pct: 1.0, label: '100.0%', color: '#8b5cf6' },
 ];
 
-// Quotex official binary candle colors (matched to platform screenshot)
+// Candle colours
 const UP = '#32A66A';
 const DOWN = '#D85C52';
 const DN_FILL = '#D85C52';
@@ -358,7 +358,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
   const liveCandlesRef = useRef<Candle[]>([]);
   /** symbol|timeframe the current view was set up for — a rebuild for the same key keeps the user's zoom */
   const viewKeyRef = useRef('');
-  /** Large candles near "now", with empty space ahead for the expiry zone (Quotex-style framing). */
+  /** Large candles near "now", with empty space ahead for the expiry zone . */
   const applyDefaultView = (totalBars: number, span: number | null) => {
     const chart = chartRef.current;
     if (!chart || !totalBars) return;
@@ -556,7 +556,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
     const hasOsc = inds.osc !== 'none';
     chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.14, bottom: hasOsc ? 0.32 : inds.vol ? 0.16 : 0.1 } });
 
-    // Quotex-style sub-pip resolution with strictly bounded minMove
+    // Sub-pip resolution with strictly bounded minMove
     const pip = /JPY/.test(symbol) ? 0.001 : /BTC|ETH|XAU/.test(symbol) ? 0.01 : 0.00001;
     const priceFormatCustom: DeepPartial<PriceFormatCustom> = {
       type: 'custom',
@@ -856,7 +856,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
       const bucket = Math.floor(now / tfMs) * tfMs;
 
       if (bucket > lastCandle.openTime) {
-        // Candle interval expired — roll cleanly to new candle with exact Quotex gap-free rule!
+        // Candle interval expired — roll cleanly to new candle with a gap-free rule
         // 1. Finalize last candle
         if (chartType === 'candles') {
           (main as ISeriesApi<'Candlestick'>).update({
@@ -901,7 +901,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
           t += tfMs;
         }
 
-        // 3. New candle: open == previous candle close (exact Quotex continuity, zero price gap)
+        // 3. New candle: open == previous candle close (continuity, zero price gap)
         const openPrice = lastCandle.close;
         const newCandle: Candle = {
           open: openPrice,
@@ -1013,7 +1013,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
             pricePillTextRef.current.textContent = fmtPrice(curPrice);
           }
 
-          // Quotex-style tick flash on the right price pill (green on uptick, red on downtick)
+          // Tick flash on the right price pill (green on uptick, red on downtick)
           if (pricePillInnerRef.current) {
             const timeSinceTick = performance.now() - lastTickTimeRef.current;
             if (timeSinceTick < 280 && lastTickDirRef.current) {
@@ -1218,7 +1218,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symTrades, timeframe, rev, clock]);
 
-  // Projected trade window when no trade is open (Quotex displays projected Beginning & End of trade)
+  // Projected trade window when no trade is open (projected beginning & end of the trade)
   const projectedTradeLines = useMemo(() => {
     if (symTrades.length > 0 && !hoverDir) return null;
     const chart = chartRef.current;
@@ -1316,7 +1316,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
       {/* Lightweight-charts container */}
       <div ref={elRef} className="absolute inset-0 z-[1]" />
 
-      {/* Quotex Top Subheader: Live UTC clock + PAIR INFORMATION */}
+      {/* Top row: Live UTC clock + PAIR INFORMATION */}
       <div className="absolute top-3 left-3 z-30 flex items-center gap-1.5 pointer-events-auto">
         {toolbar}
         <span className="hidden sm:flex h-8 px-2.5 items-center text-[11.5px] ax-num text-fog bg-base-900/95 rounded-md border border-line" title="Server time (UTC) — trades settle on this clock">
@@ -1409,7 +1409,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
         </svg>
       )}
 
-      {/* Active Fixed-Time Trades Overlay (Quotex Authentic Platform Standard) */}
+      {/* Active Fixed-Time Trades Overlay  */}
       {tradeGeo.length > 0 && (
         <svg className="absolute inset-0 w-full h-full z-[6] pointer-events-none overflow-hidden">
           <defs>
@@ -1453,7 +1453,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
                   opacity={0.035}
                 />
 
-                {/* 2. Quotex Dynamic ITM / OTM Shaded Zone between entry strike and live price */}
+                {/* 2. Dynamic ITM / OTM Shaded Zone between entry strike and live price */}
                 {g.y !== null && g.curY !== null && (
                   <rect
                     x={zoneLeft}
@@ -1542,7 +1542,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
                       strokeDasharray="6 3"
                     />
 
-                    {/* 6. Quotex Trade Entry Pin & Stake Badge at (g.x1, g.y) */}
+                    {/* 6. Trade entry pin & Stake Badge at (g.x1, g.y) */}
                     <circle
                       cx={g.x1}
                       cy={g.y}
@@ -1667,7 +1667,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
         </svg>
       )}
 
-      {/* Quotex Active Price Line & Vertical Candle Line + Pulsing Glow Dot (120Hz Hardware Accelerated) */}
+      {/* Active price line & Vertical Candle Line + Pulsing Glow Dot (120Hz Hardware Accelerated) */}
       <svg className="absolute inset-0 w-full h-full z-[7] pointer-events-none">
         {/* Horizontal Dashed Price Line from active candle to the right price scale */}
         <line
@@ -1693,7 +1693,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
           strokeDasharray="4 4"
         />
 
-        {/* Pulsing Quotex Radar Beacon at the live candle tip */}
+        {/* Pulsing beacon at the live candle tip */}
         <g ref={glowDotRef} style={{ transform: 'translate3d(-100px, -100px, 0)' }}>
           <circle ref={glowDotWaveRef} r={10} fill="#32A66A" opacity={0.35} className="animate-ping" />
           <circle ref={glowDotCoreRef} r={4} fill="#32A66A" opacity={0.9} />
@@ -1701,7 +1701,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
         </g>
       </svg>
 
-      {/* Active Candle Countdown Badge (Quotex signature "00:29" attached to active candle on horizontal line) */}
+      {/* Active Candle Countdown Badge ("00:29" attached to the active candle on the horizontal line) */}
       <div
         ref={countdownBadgeRef}
         className="absolute top-0 left-0 z-20 pointer-events-none will-change-transform"
@@ -1731,7 +1731,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
         </div>
       )}
 
-      {/* Blue Price Pill on the Right Scale (Quotex Signature Style with tick flash & alert bell) */}
+      {/* Blue Price Pill on the Right Scale (tick flash & alert bell) */}
       <div
         ref={pricePillRef}
         className="absolute top-0 right-0 z-20 pointer-events-auto flex items-center will-change-transform"
@@ -1746,7 +1746,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
         </div>
       </div>
 
-      {/* Floating Bottom-Left Toolbar (Quotex layout: Pencil, Timeframe, Chart Type, Open price) */}
+      {/* Floating Bottom-Left Toolbar (pencil, timeframe, chart type, open price) */}
       <div className="absolute left-4 bottom-3 z-20 flex items-center gap-1.5 bg-base-900/95 backdrop-blur-md border border-white/10 rounded-lg p-1 shadow-panel select-none">
         {/* Drawing tools button */}
         <button
@@ -1879,7 +1879,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
           )}
         </div>
 
-        {/* Quotex Open Price display */}
+        {/* Open price display */}
         <div className="border-l border-white/10 pl-2 pr-1 flex items-center text-[11px] font-mono text-fog">
           <span>Open:&nbsp;</span>
           <span ref={openPriceTextRef} className="text-cream font-semibold">{fmtPrice(legend?.open ?? activeCandleRef.current?.open ?? 0)}</span>
@@ -1906,7 +1906,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
         </div>
       )}
 
-      {/* Quotex Pair Information Modal */}
+      {/* Pair information modal */}
       {showPairInfo && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setShowPairInfo(false)}>
           <div className="bg-base-900 border border-white/15 rounded-lg w-full max-w-md p-5 text-cream shadow-pop space-y-4" onClick={(e) => e.stopPropagation()}>
