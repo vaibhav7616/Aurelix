@@ -7,6 +7,33 @@ import { fmtMoney } from '../../lib/format';
 import { apiError } from '../../lib/api';
 import { useAffMe, Icon } from '../../pages/affiliate/shared';
 import { AffiliateApply, AffiliateStatusScreen } from '../../pages/affiliate/AffiliateApply';
+import { useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { post } from '../../lib/api';
+
+/** First visit with instant access: open the partner account automatically (no form). */
+function AutoJoin() {
+  const qc = useQueryClient();
+  const [err, setErr] = useState<string | null>(null);
+  const started = useRef(false);
+  const run = () => {
+    let subRef: string | undefined;
+    try { subRef = localStorage.getItem('ax_subref') || undefined; } catch { /* storage off */ }
+    post('/api/v1/affiliate/enroll', subRef && /^[A-Za-z0-9]{1,16}$/.test(subRef) ? { subRef } : {})
+      .then(() => { try { localStorage.removeItem('ax_subref'); } catch { /* ignore */ } return qc.invalidateQueries({ queryKey: ['aff'] }); })
+      .catch((e) => setErr(apiError(e)));
+  };
+  useEffect(() => { if (!started.current) { started.current = true; run(); } }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  if (err) return (
+    <div className="p-6">
+      <div className="ax-panel p-4 text-xs text-down flex items-center gap-3">
+        {err}
+        <button className="ax-btn-ghost ax-btn-sm ml-auto" onClick={() => { setErr(null); run(); }}>Retry</button>
+      </div>
+    </div>
+  );
+  return <div className="p-6 text-xs text-mute">Opening your partner account…</div>;
+}
 
 /** [path, label, svg path, tag] */
 const NAV: Array<[string, string, string, string?]> = [
@@ -58,7 +85,8 @@ export function AffiliateShell() {
   const path = pathname.replace(/\/+$/, '') || '/affiliate';
   const pageName = NAV.find(([to]) => to === path)?.[1] ?? 'This page';
   const approved = aff?.affiliate.status === 'APPROVED';
-  const isLocked = (to: string) => !me.isLoading && !approved && !(aff ? OPEN_WHEN_NOT_APPROVED : OPEN_WITHOUT_APPLICATION).includes(to);
+  const joining = !aff && !!d && 'autoJoin' in d && !!d.autoJoin;
+  const isLocked = (to: string) => !me.isLoading && !joining && !approved && !(aff ? OPEN_WHEN_NOT_APPROVED : OPEN_WITHOUT_APPLICATION).includes(to);
 
   let content;
   if (me.isLoading) content = <div className="p-6 text-xs text-mute">Loading your partner account…</div>;
@@ -70,6 +98,7 @@ export function AffiliateShell() {
       </div>
     </div>
   );
+  else if (!aff && d && 'autoJoin' in d && d.autoJoin) content = <AutoJoin />;
   else if (!aff && OPEN_WITHOUT_APPLICATION.includes(path)) content = <Outlet />;
   else if (!aff) content = <>{path !== '/affiliate' && <LockedNotice page={pageName} applied={false} />}<AffiliateApply /></>;
   else if (aff.affiliate.status !== 'APPROVED' && !OPEN_WHEN_NOT_APPROVED.includes(path)) content = <><LockedNotice page={pageName} applied /><AffiliateStatusScreen affiliate={aff.affiliate} /></>;

@@ -54,8 +54,10 @@ export function AffiliateLinks() {
         <div className="text-xs text-fog leading-relaxed space-y-2 max-w-[860px]">
           <p>
             Your links are unique to your partner account — every trader who arrives through one of them is attributed to you.
-            Ready-made links are created for each commission model available to you: <span className="text-ink1 font-semibold">Revenue Share</span> (a share of the platform's net result on your traders)
-            and <span className="text-ink1 font-semibold">Turnover Share</span> (a share of your traders' trade volume). The model is fixed for each trader when they register.
+            You get three ready links — Main page, Register link and Markets page. Each link pays under one programme:
+            {' '}<span className="text-ink1 font-semibold">Revenue Share</span> (a share of the platform's net result on your traders)
+            or <span className="text-ink1 font-semibold">Turnover Share</span> (a share of your traders' trade volume), shown in the Program column.
+            The programme is fixed for each trader when they register. Need the other programme? Press <span className="text-ink1 font-semibold">+ New link</span> and choose it.
           </p>
           <p>
             Read how each model is calculated in <Link to="/affiliate/programs" className="text-accent-300 hover:underline">Affiliate Programs</Link>.
@@ -151,7 +153,7 @@ export function AffiliateLinks() {
       <Panel title="Link parameters">
         <div className="text-xs text-fog leading-relaxed space-y-2">
           <p>Any link can carry two optional parameters, so you can see which placement brought each trader:</p>
-          <p className="ax-well p-3 font-mono text-[11px] break-all text-ink1">{window.location.origin}/register?lid=100001&amp;sub=summer_post&amp;click_id=8f2c1a</p>
+          <p className="ax-well p-3 font-mono text-[11px] break-all text-ink1">{(() => { const ex = (links.data ?? []).find((l) => !l.archived && l.landing === '/register') ?? links.data?.[0]; return ex ? linkUrl(ex) : `${window.location.origin}/register?lid=YOUR_LINK_ID`; })()}&amp;sub=summer_post&amp;click_id=8f2c1a</p>
           <ul className="list-disc pl-5 space-y-1">
             <li><span className="font-mono text-ink1">sub</span> — your own label (channel, post, campaign). It overrides the link's sub-ID and is shown in Statistics.</li>
             <li><span className="font-mono text-ink1">click_id</span> — the visit id from your tracker. It comes back to you in <Link to="/affiliate/postbacks" className="text-accent-300 hover:underline">postbacks</Link> as <span className="font-mono">{'{click_id}'}</span>.</li>

@@ -15,7 +15,7 @@ export interface Affiliate {
 }
 export interface PayoutChecks { approved: boolean; verified: boolean; activeTraders: boolean; minBalance: boolean; payoutDetails: boolean }
 export type AffMe =
-  | { affiliate: null }
+  | { affiliate: null; autoJoin?: boolean }
   | {
     affiliate: Affiliate; level: Level; nextLevel: Level | null; depositsThisMonth: number; projectedLevel: Level;
     balance: number; held: number; activeTraders: number; payoutChecks: PayoutChecks; payoutEligible: boolean;

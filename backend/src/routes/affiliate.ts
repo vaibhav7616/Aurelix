@@ -35,7 +35,7 @@ const approved = (req: AffReq, _res: Response, next: NextFunction) => {
 r.get('/me', ah(async (req: AffReq, res) => {
   const cfg = await getAffiliateConfig();
   const aff = await prisma.affiliate.findUnique({ where: { userId: req.userId! } });
-  if (!aff) { res.json({ success: true, data: { affiliate: null }, error: null }); return; }
+  if (!aff) { res.json({ success: true, data: { affiliate: null, autoJoin: cfg.autoApprove }, error: null }); return; }
   const now = new Date();
   const [level, thisMonth, elig] = await Promise.all([
     currentLevel(aff.id, cfg),
@@ -55,6 +55,40 @@ r.get('/me', ah(async (req: AffReq, res) => {
     },
     error: null,
   });
+}));
+
+/**
+ * Instant partner account (autoApprove on): the first visit to the Affiliate Center turns the signed-in
+ * user into an approved partner — no form. Programme terms are accepted on the Affiliate Center sign-in pages.
+ */
+r.post('/enroll', validateBody(z.object({ subRef: z.string().trim().max(16).regex(/^[A-Za-z0-9]*$/).optional() })), ah(async (req: AuthedRequest, res) => {
+  const cfg = await getAffiliateConfig();
+  if (!cfg.autoApprove) throw Err.forbidden('Please send the partner application');
+  const existing = await prisma.affiliate.findUnique({ where: { userId: req.userId! } });
+  if (existing) { res.json({ success: true, data: { id: existing.id, status: existing.status }, error: null }); return; }
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: req.userId! }, select: { country: true } });
+  const country = user.country?.toUpperCase() ?? null;
+  if (country && cfg.blockedCountries.includes(country)) throw Err.validation('The affiliate programme is not available in your country');
+  const { subRef } = req.body as { subRef?: string };
+  const parent = subRef ? await prisma.affiliate.findUnique({ where: { subCode: subRef.toUpperCase() } }) : null;
+  let subCode = newCode();
+  while (await prisma.affiliate.findUnique({ where: { subCode } })) subCode = newCode();
+  let aff;
+  try {
+    aff = await prisma.affiliate.create({
+      data: {
+        userId: req.userId!, country, trafficSources: '', subCode, status: 'APPROVED',
+        parentId: parent && parent.status === 'APPROVED' && parent.userId !== req.userId ? parent.id : null,
+      },
+    });
+  } catch (e) {
+    // two tabs enrolling at once: the unique userId keeps a single partner account
+    if ((e as { code?: string }).code === 'P2002') { res.json({ success: true, data: await prisma.affiliate.findUnique({ where: { userId: req.userId! }, select: { id: true, status: true } }), error: null }); return; }
+    throw e;
+  }
+  await ensureDefaultLinks(aff);
+  await audit({ actorId: req.userId, action: 'AFFILIATE_ENROLL', entityType: 'Affiliate', entityId: aff.id, ipAddress: req.ip, metadata: { termsAccepted: true, country } });
+  res.status(201).json({ success: true, data: { id: aff.id, status: aff.status }, error: null });
 }));
 
 const applySchema = z.object({
@@ -264,12 +298,12 @@ async function assertModelAllowed(aff: { country: string | null }, model: string
   if (model === 'CPA' && !cpaRate(cfg, null) && !Object.keys(cfg.cpa.rates).length) throw Err.validation('CPA is not available at the moment');
 }
 
-/** Every partner gets a ready set of links (per available model) the first time they open Links. */
+/** Every partner gets 3 ready links (Main page, Register link, Markets page) the first time they open Links. */
 export async function ensureDefaultLinks(aff: { id: string; country: string | null }): Promise<void> {
   if (await prisma.affiliateLink.count({ where: { affiliateId: aff.id } })) return;
   const cfg = await getAffiliateConfig();
-  const models: Array<'REVSHARE' | 'TURNOVER'> = ['TURNOVER'];
-  if (!(aff.country && cfg.revshareBlockedCountries.includes(aff.country))) models.unshift('REVSHARE');
+  // one set of 3 links: Revenue Share by default, Turnover Share where Revenue Share is not offered
+  const models: Array<'REVSHARE' | 'TURNOVER'> = [aff.country && cfg.revshareBlockedCountries.includes(aff.country) ? 'TURNOVER' : 'REVSHARE'];
   for (const model of models) {
     for (const [name, landing] of [['Main page', '/'], ['Register link', '/register'], ['Markets page', '/markets']] as const) {
       let code = newCode(8);

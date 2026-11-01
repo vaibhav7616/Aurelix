@@ -169,6 +169,7 @@ export function AffiliateLogin() {
           </div>
           <Err message={err} />
           <button className="ax-btn-primary w-full !h-10" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
+          <p className="text-[11px] text-mute text-center leading-relaxed">By signing in to the Affiliate Center you accept the Affiliate Programme terms and marketing rules.</p>
         </form>
       ) : (
         <form onSubmit={reset} className="space-y-3.5">
@@ -223,7 +224,7 @@ export function AffiliateSignup() {
       <form onSubmit={submit} className="space-y-3.5">
         <div>
           <h1 className="text-lg font-semibold tracking-tight text-cream">Become a partner</h1>
-          <p className="text-xs text-mute mt-0.5">Create your account, then tell us about your traffic sources. One account works for both the Affiliate Center and the trading platform.</p>
+          <p className="text-xs text-mute mt-0.5">One account works for both the Affiliate Center and the trading platform.</p>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div><label htmlFor="as-fn" className="ax-label">First name</label><input id="as-fn" className="ax-input" autoComplete="given-name" value={f.firstName} onChange={set('firstName')} required maxLength={80} /></div>
@@ -233,6 +234,7 @@ export function AffiliateSignup() {
         <div><label htmlFor="as-pass" className="ax-label">Password</label><input id="as-pass" className="ax-input" type="password" autoComplete="new-password" minLength={8} value={f.password} onChange={set('password')} required /></div>
         <Err message={err} />
         <button className="ax-btn-primary w-full !h-10" disabled={busy}>{busy ? 'Creating account…' : 'Sign up'}</button>
+        <p className="text-[11px] text-mute text-center leading-relaxed">By signing up you accept the Affiliate Programme terms and marketing rules. Your partner tools open right away.</p>
       </form>
     </AuthFrame>
   );
