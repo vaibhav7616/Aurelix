@@ -38,9 +38,9 @@ export function AffiliateApply() {
     mutationFn: () => post<{ id: string; status: string }>(`${AFF}/apply`, {
       country: code, trafficSources: traffic.trim(), acceptTerms: true, ...(subRef && /^[A-Za-z0-9]{1,16}$/.test(subRef) ? { subRef } : {}),
     }),
-    onSuccess: () => {
+    onSuccess: (r) => {
       try { localStorage.removeItem('ax_subref'); } catch { /* ignore */ }
-      push('ok', 'Application sent — we will review it shortly');
+      push('ok', r.status === 'APPROVED' ? 'Welcome to the Aurelix Affiliate Center — your partner tools are open' : 'Application sent — we will review it shortly');
       qc.invalidateQueries({ queryKey: ['aff'] });
     },
     onError: (e) => push('err', apiError(e)),
@@ -58,7 +58,7 @@ export function AffiliateApply() {
   const first = p?.levels[0];
 
   return (
-    <Page title="Become an Aurelix partner" lead="Refer traders to Aurelix and earn commission on their activity. Tell us about your audience and we will review your application.">
+    <Page title="Become an Aurelix partner" lead="Refer traders to Aurelix and earn commission on their activity. Fill in this short form once — your partner tools open straight away.">
       <div className="grid lg:grid-cols-[1fr_340px] gap-4 items-start">
         <Panel title="Application">
           <form onSubmit={submit} className="space-y-4">
@@ -91,7 +91,7 @@ export function AffiliateApply() {
               <span>I agree to the affiliate terms and the marketing rules</span>
             </label>
             {subRef && <p className="text-[11px] text-mute">You were invited by partner code <span className="font-mono text-fog">{subRef}</span>.</p>}
-            <button type="submit" className="ax-btn-primary" disabled={apply.isPending}>{apply.isPending ? 'Sending…' : 'Send application'}</button>
+            <button type="submit" className="ax-btn-primary" disabled={apply.isPending}>{apply.isPending ? 'Opening…' : 'Become a partner'}</button>
           </form>
         </Panel>
 

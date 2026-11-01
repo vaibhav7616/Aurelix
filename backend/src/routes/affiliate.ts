@@ -72,9 +72,15 @@ r.post('/apply', validateBody(applySchema), ah(async (req: AuthedRequest, res) =
   let subCode = newCode();
   while (await prisma.affiliate.findUnique({ where: { subCode } })) subCode = newCode();
   const aff = await prisma.affiliate.create({
-    data: { userId: req.userId!, country: country.toUpperCase(), trafficSources, subCode, parentId: parent && parent.status === 'APPROVED' && parent.userId !== req.userId ? parent.id : null },
+    data: {
+      userId: req.userId!, country: country.toUpperCase(), trafficSources, subCode,
+      parentId: parent && parent.status === 'APPROVED' && parent.userId !== req.userId ? parent.id : null,
+      // instant access: tools open right away; payouts still need verification, active traders and fraud checks
+      status: cfg.autoApprove ? 'APPROVED' : 'PENDING',
+    },
   });
-  await audit({ actorId: req.userId, action: 'AFFILIATE_APPLY', entityType: 'Affiliate', entityId: aff.id, ipAddress: req.ip });
+  if (aff.status === 'APPROVED') await ensureDefaultLinks(aff);
+  await audit({ actorId: req.userId, action: cfg.autoApprove ? 'AFFILIATE_APPLY_AUTO_APPROVED' : 'AFFILIATE_APPLY', entityType: 'Affiliate', entityId: aff.id, ipAddress: req.ip });
   res.status(201).json({ success: true, data: { id: aff.id, status: aff.status }, error: null });
 }));
 

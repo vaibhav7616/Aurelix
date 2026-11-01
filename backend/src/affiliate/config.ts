@@ -31,6 +31,8 @@ export interface AffiliateConfig {
   attributionDays: number;
   /** no commission accrues while the partner has brought no new Active Trader for this many days */
   inactivityDays: number;
+  /** true: a partner is approved the moment they apply (tools open instantly); false: an admin reviews every application */
+  autoApprove: boolean;
 }
 
 /** Territories that cannot join the programme (agreement default; adjust for your own licensing). */
@@ -63,6 +65,7 @@ export const DEFAULT_AFFILIATE: AffiliateConfig = {
   revshareBlockedCountries: REVSHARE_BLOCKED,
   attributionDays: 30,
   inactivityDays: 90,
+  autoApprove: true,
 };
 
 const n = (v: unknown, lo: number, hi: number, d: number) => (typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi ? v : d);
@@ -97,6 +100,7 @@ export function parseAffiliateConfig(raw: string | null | undefined): AffiliateC
       revshareBlockedCountries: codes(j.revshareBlockedCountries, d.revshareBlockedCountries),
       attributionDays: n(j.attributionDays, 1, 365, d.attributionDays),
       inactivityDays: n(j.inactivityDays, 1, 3650, d.inactivityDays),
+      autoApprove: typeof j.autoApprove === 'boolean' ? j.autoApprove : d.autoApprove,
     };
   } catch {
     logger.warn({ key: AFFILIATE_KEY }, 'invalid affiliate config JSON — using defaults');

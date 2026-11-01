@@ -40,7 +40,7 @@ function LockedNotice({ page, applied }: { page: string; applied: boolean }) {
           <span className="font-semibold">{page} is locked.</span>{' '}
           {applied
             ? 'Partner tools open as soon as the partner team approves your application.'
-            : 'This account is not a partner yet. Send the short application below — partner tools open once it is approved.'}
+            : 'This account is not a partner yet. Fill in the short form below once and every partner tool opens straight away.'}
         </div>
       </div>
     </div>
