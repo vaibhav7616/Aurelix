@@ -6,6 +6,7 @@ import { subscribeMarket } from '../../services/socket';
 import { fmtPrice, fmtPct } from '../../lib/format';
 import { clsx } from 'clsx';
 import { TableSkeleton } from '../ui/primitives';
+import { useShallow } from 'zustand/react/shallow';
 
 interface AssetTick { symbol: string; mid: number; bid: number; ask: number; changePct24h: number; ts: number }
 export interface AssetRow { symbol: string; name: string; category: string; enabled: boolean; payoutPct?: number; tick: AssetTick | null }
@@ -13,7 +14,7 @@ export interface AssetRow { symbol: string; name: string; category: string; enab
 const CATS = ['ALL', 'FAV', 'CRYPTO', 'FOREX', 'METALS', 'INDICES'] as const;
 
 function Row({ a, active, onPick }: { a: AssetRow; active: boolean; onPick: () => void }) {
-  const { ticks, favorites, toggleFavorite } = useTerminal();
+  const { ticks, favorites, toggleFavorite } = useTerminal(useShallow((s) => ({ ticks: s.ticks, favorites: s.favorites, toggleFavorite: s.toggleFavorite })));
   const live = ticks[a.symbol];
   const mid = live?.mid ?? a.tick?.mid ?? 0;
   const chg = live?.changePct24h ?? a.tick?.changePct24h ?? 0;
@@ -61,7 +62,7 @@ function Row({ a, active, onPick }: { a: AssetRow; active: boolean; onPick: () =
 }
 
 export function Watchlist() {
-  const { symbol, setSymbol, favorites } = useTerminal();
+  const { symbol, setSymbol, favorites } = useTerminal(useShallow((s) => ({ symbol: s.symbol, setSymbol: s.setSymbol, favorites: s.favorites })));
   const [q, setQ] = useState('');
   const [cat, setCat] = useState<(typeof CATS)[number]>('ALL');
   const { data, isLoading } = useQuery({

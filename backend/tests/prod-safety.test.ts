@@ -37,3 +37,20 @@ describe('deposit details come from the environment', () => {
     expect(availableMethods(s)).toEqual(['upi_qr']);
   });
 });
+
+describe('refresh token hashing', () => {
+  it('stores a stable SHA-256 hex digest, never the token', async () => {
+    const { hashToken } = await import('../src/utils/tokenHash');
+    const h = hashToken('abc');
+    expect(h).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+    expect(h).not.toContain('abc');
+  });
+});
+
+describe('leaderboard handle masking', () => {
+  it('never publishes a full username', async () => {
+    const { maskHandle } = await import('../src/routes/leaderboard');
+    expect(maskHandle('demotrader')).toBe('de***r');
+    expect(maskHandle('bob')).toBe('b***');
+  });
+});

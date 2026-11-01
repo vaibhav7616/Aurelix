@@ -39,6 +39,34 @@ const ACC = '#32A66A';
 const GRID = 'rgba(255, 255, 255, 0.04)';
 const TEXT = '#A6B0A3';
 
+/** Default zoom: ~26px per candle; the right ~22% of the view stays empty for the trade/expiry zone. */
+const BAR_PX = 26;
+const FUTURE_SHARE = 0.22;
+/** zoom is remembered separately for phone-size and desktop charts */
+const spanKey = (width: number) => (width < 640 ? 'ax_chart_span_m' : 'ax_chart_span');
+function defaultSpan(width: number): number {
+  return Math.min(70, Math.max(24, Math.round(width / BAR_PX)));
+}
+function savedSpan(width: number): number | null {
+  try { const v = Number(localStorage.getItem(spanKey(width))); return v >= 10 && v <= 600 ? v : null; } catch { return null; }
+}
+
+/** Glide time of the live price toward each new quote (critically damped — follows fast, never overshoots). */
+const SMOOTH_TIME = 0.12;
+/** One step of a critically damped spring (Unity-style SmoothDamp). Returns [value, velocity]. */
+function smoothDamp(current: number, target: number, velocity: number, dt: number): [number, number] {
+  const omega = 2 / SMOOTH_TIME;
+  const x = omega * dt;
+  const decay = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
+  const change = current - target;
+  const temp = (velocity + omega * change) * dt;
+  let v = (velocity - omega * temp) * decay;
+  let out = target + (change + temp) * decay;
+  // never pass the quote: the candle must not show a price the market did not reach
+  if ((target - current > 0) === (out > target)) { out = target; v = 0; }
+  return [out, v];
+}
+
 export function tfToMs(tf: string): number {
   switch (tf) {
     case '5s': return 5_000;
@@ -328,6 +356,17 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
 
   // Live real-time candle state
   const liveCandlesRef = useRef<Candle[]>([]);
+  /** symbol|timeframe the current view was set up for — a rebuild for the same key keeps the user's zoom */
+  const viewKeyRef = useRef('');
+  /** Large candles near "now", with empty space ahead for the expiry zone (Quotex-style framing). */
+  const applyDefaultView = (totalBars: number, span: number | null) => {
+    const chart = chartRef.current;
+    if (!chart || !totalBars) return;
+    const width = (elRef.current?.clientWidth ?? 900) - 70; // minus the price scale
+    const s = span ?? defaultSpan(width);
+    const future = Math.round(s * FUTURE_SHARE);
+    chart.timeScale().setVisibleLogicalRange({ from: totalBars - (s - future), to: totalBars + future });
+  };
   const activeCandleRef = useRef<Candle | null>(null);
   const targetPriceRef = useRef<number | null>(null);
   const currentPriceRef = useRef<number | null>(null);
@@ -459,7 +498,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
       },
       rightPriceScale: {
         borderColor: 'rgba(255,255,255,0.08)',
-        scaleMargins: { top: 0.08, bottom: 0.08 },
+        scaleMargins: { top: 0.14, bottom: 0.1 },
       },
       timeScale: {
         borderColor: 'rgba(255,255,255,0.08)',
@@ -476,7 +515,14 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
       crossRef.current = p;
       setHoverT((p.time as number) ?? null);
     });
-    const onRange = () => bump();
+    let saveTimer: ReturnType<typeof setTimeout> | undefined;
+    const onRange = () => {
+      bump();
+      const r = chart.timeScale().getVisibleLogicalRange();
+      if (!r) return;
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => { try { localStorage.setItem(spanKey(elRef.current?.clientWidth ?? 900), String(Math.round(r.to - r.from))); } catch { /* storage off */ } }, 400);
+    };
     chart.timeScale().subscribeVisibleLogicalRangeChange(onRange);
     return () => { chart.remove(); chartRef.current = null; mainRef.current = null; volRef.current = null; indRefs.current = []; oscRefs.current = []; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -498,6 +544,8 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || !candles.length) return;
+    const viewKey = `${symbol}|${timeframe}`;
+    const keepRange = viewKeyRef.current === viewKey ? chart.timeScale().getVisibleLogicalRange() : null;
     for (const { s } of indRefs.current) { try { chart.removeSeries(s); } catch { /* noop */ } }
     for (const s of oscRefs.current) { try { chart.removeSeries(s as never); } catch { /* noop */ } }
     indRefs.current = []; oscRefs.current = [];
@@ -506,7 +554,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
 
     const times = candles.map((c) => (c.openTime / 1000) as Time);
     const hasOsc = inds.osc !== 'none';
-    chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.08, bottom: hasOsc ? 0.32 : inds.vol ? 0.14 : 0.08 } });
+    chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.14, bottom: hasOsc ? 0.32 : inds.vol ? 0.16 : 0.1 } });
 
     // Quotex-style sub-pip resolution with strictly bounded minMove
     const pip = /JPY/.test(symbol) ? 0.001 : /BTC|ETH|XAU/.test(symbol) ? 0.01 : 0.00001;
@@ -644,20 +692,13 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
       }
     }
 
-    // Quotex full-viewport candle width and visible logical range (80+ historical candles)
-    chart.timeScale().applyOptions({
-      barSpacing: 14,
-      minBarSpacing: 4,
-      rightOffset: 6,
-      shiftVisibleRangeOnNewBar: true,
-    });
-    const totalBars = candles.length;
-    if (totalBars > 0) {
-      const visibleBars = Math.min(totalBars, 80);
-      chart.timeScale().setVisibleLogicalRange({
-        from: Math.max(0, totalBars - visibleBars),
-        to: totalBars + 6,
-      });
+    chart.timeScale().applyOptions({ minBarSpacing: 4, shiftVisibleRangeOnNewBar: true });
+    if (keepRange) {
+      // indicator / chart-type change or data reload: the user's zoom and position stay put
+      chart.timeScale().setVisibleLogicalRange(keepRange);
+    } else {
+      applyDefaultView(candles.length, savedSpan(elRef.current?.clientWidth ?? 900));
+      viewKeyRef.current = viewKey;
     }
     setLegend(candles[candles.length - 1]);
     bump();
@@ -750,7 +791,7 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
     return () => document.removeEventListener('visibilitychange', onVis);
   }, [symbol, timeframe, queryClient]);
 
-  // High-performance 120Hz+ live loop with unconditionally stable exponential easing & micro-breathing
+  // Live loop (one frame per display refresh): spring-smoothed price, candle roll on the server clock
   useEffect(() => {
     let lastPerfTime = performance.now();
     let lastTimeUpdate = 0;
@@ -787,11 +828,12 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
       if (Math.abs(targetPrice - currentPrice) > currentPrice * 0.10) {
         currentPrice = targetPrice;
       } else {
-        // High-precision exponential lerp: continuous silky-smooth easing that settles organically
-        const blend = 1 - Math.exp(-22 * dt);
-        currentPrice = currentPrice + (targetPrice - currentPrice) * blend;
+        const [next, v] = smoothDamp(currentPrice, targetPrice, velocityRef.current, dt);
+        currentPrice = next;
+        velocityRef.current = v;
         if (Math.abs(targetPrice - currentPrice) < pip * 0.02) {
           currentPrice = targetPrice;
+          velocityRef.current = 0;
         }
       }
 
@@ -800,7 +842,6 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
       }
 
       currentPriceRef.current = currentPrice;
-      velocityRef.current = 0;
 
       // Only real quotes are drawn — no synthetic jitter: the candle must show exactly the prices the server settles on
       let curPrice = Number(currentPrice.toFixed(/JPY/.test(symbol) ? 3 : /BTC|ETH|XAU/.test(symbol) ? 2 : 5));
@@ -891,7 +932,9 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
             value: newCandle.close,
           });
         }
-        chart.timeScale().scrollToRealTime();
+        const vr = chart.timeScale().getVisibleLogicalRange();
+        const atLiveEdge = !vr || vr.to >= liveCandlesRef.current.length - 2;
+        if (atLiveEdge) chart.timeScale().scrollToRealTime();
         if (openPriceTextRef.current) {
           openPriceTextRef.current.textContent = fmtPrice(newCandle.open);
         }
@@ -1253,15 +1296,8 @@ export function PriceChart({ toolbar }: { toolbar?: ReactNode } = {}) {
     try {
       chart.priceScale('right').applyOptions({ autoScale: true });
     } catch { /* noop */ }
-    ts.applyOptions({ barSpacing: 28, rightOffset: 12 });
-    const list = liveCandlesRef.current;
-    if (list.length) {
-      ts.setVisibleLogicalRange({
-        from: Math.max(0, list.length - 22),
-        to: list.length + 8,
-      });
-    }
-    ts.scrollToRealTime();
+    try { localStorage.removeItem(spanKey(elRef.current?.clientWidth ?? 900)); } catch { /* storage off */ }
+    applyDefaultView(liveCandlesRef.current.length, null);
   };
 
   const toggleFull = () => {

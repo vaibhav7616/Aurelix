@@ -62,3 +62,30 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
   nginx:
     restart: always
+    ports: !reset
+      - "80:80"
+      - "443:443"
+    volumes: !reset
+      - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/templates:/etc/nginx/templates:ro
+      - letsencrypt:/etc/letsencrypt:ro
+      - certbot-www:/var/www/certbot:ro
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN e.g. app.example.com}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/healthz || exit 1"]
+    # pick up renewed certificates
+    command: ["/bin/sh", "-c", "while :; do sleep 12h; nginx -s reload; done & exec /docker-entrypoint.sh nginx -g 'daemon off;'"]
+  certbot:
+    image: certbot/certbot:v2.11.0
+    restart: always
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - certbot-www:/var/www/certbot
+    # renew twice a day; certbot only renews certificates that are close to expiry
+    entrypoint: ["/bin/sh", "-c", "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done"]
+    networks: [aurelix-net]
+
+volumes:
+  letsencrypt:
+  certbot-www:

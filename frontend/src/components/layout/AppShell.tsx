@@ -12,6 +12,7 @@ import { DEFAULT_SYMBOLS } from '../../lib/constants';
 import { fmtMoney } from '../../lib/format';
 import { soundService } from '../../lib/sound';
 import { useAppTheme } from '../../hooks/useAppTheme';
+import { useShallow } from 'zustand/react/shallow';
 
 interface Account { id: string; accountNumber: string; balance: number; lockedBalance?: number; equity: number; accountType: 'DEMO' | 'LIVE' }
 interface NotifResp { items: Array<{ id: string; title: string; message: string }>; unread: number }
@@ -247,7 +248,7 @@ function FeedStatus() {
 export function AppShell() {
   const { user } = useAuth();
   const nav = useNavigate();
-  const { accountId, setAccountId } = useTerminal();
+  const { accountId, setAccountId } = useTerminal(useShallow((s) => ({ accountId: s.accountId, setAccountId: s.setAccountId })));
 
   const { data: accounts } = useQuery({ queryKey: ['accounts'], queryFn: () => get<Account[]>('/api/v1/accounts'), refetchInterval: 10000 });
   const { data: ratesData } = useQuery({

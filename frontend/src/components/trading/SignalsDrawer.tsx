@@ -6,6 +6,7 @@ import { useSignalsStore, type TradingSignalItem, type SignalFilter } from '../.
 import { getAssetMeta } from '../../lib/assetMeta';
 import { soundService } from '../../lib/sound';
 import { clsx } from 'clsx';
+import { useShallow } from 'zustand/react/shallow';
 
 function formatRemaining(expiresAt: number): string {
   const diff = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
@@ -16,7 +17,7 @@ function formatRemaining(expiresAt: number): string {
 
 export function SignalsDrawer() {
   const { isOpen, setOpen, filter, setFilter, armSignal } = useSignalsStore();
-  const { setSymbol, addTab, setPendingDuration } = useTerminal();
+  const { setSymbol, addTab, setPendingDuration } = useTerminal(useShallow((s) => ({ setSymbol: s.setSymbol, addTab: s.addTab, setPendingDuration: s.setPendingDuration })));
   const [, setTick] = useState(0);
 
   // Re-render countdown every second

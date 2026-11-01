@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import qrcode from 'qrcode-generator';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { get, post, apiError } from '../../lib/api';
@@ -7,6 +8,7 @@ import { useUI } from '../../stores/uiStore';
 import { Card, SectionTitle, Empty } from '../../components/ui/primitives';
 import { fmtMoney, fmtTime } from '../../lib/format';
 import { clsx } from 'clsx';
+import { useShallow } from 'zustand/react/shallow';
 
 interface Account {
   id: string;
@@ -149,56 +151,33 @@ const DEPOSIT_METHODS = [
 
 const PRESET_AMOUNTS = [10, 25, 50, 100, 250, 500, 1000, 2500];
 
-// SVG / Dynamic QR Code generator component
+// Payment QR, generated in the browser: the UPI payload (payee, amount, order ref) never leaves the
+// page, and nobody else can swap the QR the user scans.
 function QrDisplay({ payload, label }: { payload: string; label: string }) {
-  const [imgError, setImgError] = useState(false);
-  const qrUrl = payload ? `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(payload)}` : '';
+  const path = useMemo(() => {
+    if (!payload) return null;
+    try {
+      const qr = qrcode(0, 'M');
+      qr.addData(payload);
+      qr.make();
+      const n = qr.getModuleCount();
+      let d = '';
+      for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) d += `M${c} ${r}h1v1h-1z`;
+      return { d, n };
+    } catch {
+      return null;
+    }
+  }, [payload]);
 
   return (
-    <div className="flex flex-col items-center justify-center p-3.5 bg-white rounded-md shadow-lg border border-ink1 shrink-0">
-      {!imgError && qrUrl ? (
-        <img
-          src={qrUrl}
-          alt="Payment QR"
-          width={180}
-          height={180}
-          onError={() => setImgError(true)}
-          className="rounded-lg object-contain"
-        />
-      ) : (
-        <svg width="180" height="180" viewBox="0 0 100 100" className="shape-rendering-crispEdges">
-          <rect width="100" height="100" fill="#ffffff" />
-          {/* Top-left position marker */}
-          <rect x="6" y="6" width="28" height="28" fill="#101610" rx="3" />
-          <rect x="10" y="10" width="20" height="20" fill="#ffffff" rx="2" />
-          <rect x="14" y="14" width="12" height="12" fill="#101610" rx="1.5" />
-          {/* Top-right position marker */}
-          <rect x="66" y="6" width="28" height="28" fill="#101610" rx="3" />
-          <rect x="70" y="10" width="20" height="20" fill="#ffffff" rx="2" />
-          <rect x="74" y="14" width="12" height="12" fill="#101610" rx="1.5" />
-          {/* Bottom-left position marker */}
-          <rect x="6" y="66" width="28" height="28" fill="#101610" rx="3" />
-          <rect x="10" y="70" width="20" height="20" fill="#ffffff" rx="2" />
-          <rect x="14" y="74" width="12" height="12" fill="#101610" rx="1.5" />
-          {/* Simulated data pattern dots */}
-          <circle cx="45" cy="15" r="3" fill="#101610" />
-          <circle cx="55" cy="20" r="2.5" fill="#101610" />
-          <circle cx="48" cy="28" r="3" fill="#101610" />
-          <circle cx="20" cy="45" r="2.5" fill="#101610" />
-          <circle cx="28" cy="52" r="3" fill="#101610" />
-          <circle cx="40" cy="42" r="2.8" fill="#101610" />
-          <circle cx="50" cy="50" r="3.5" fill="#32A66A" />
-          <circle cx="60" cy="44" r="2.5" fill="#101610" />
-          <circle cx="75" cy="48" r="3" fill="#101610" />
-          <circle cx="85" cy="55" r="2.5" fill="#101610" />
-          <circle cx="44" cy="65" r="3" fill="#101610" />
-          <circle cx="55" cy="72" r="2.5" fill="#101610" />
-          <circle cx="68" cy="68" r="3" fill="#101610" />
-          <circle cx="82" cy="78" r="3" fill="#101610" />
-          <circle cx="48" cy="85" r="2.8" fill="#101610" />
-          <circle cx="62" cy="88" r="2.5" fill="#101610" />
-          <circle cx="78" cy="88" r="3" fill="#101610" />
+    <div className="flex flex-col items-center justify-center p-3.5 bg-white rounded-md border border-ink1 shrink-0">
+      {path ? (
+        <svg width="180" height="180" viewBox={`-2 -2 ${path.n + 4} ${path.n + 4}`} shapeRendering="crispEdges" role="img" aria-label="Payment QR code">
+          <rect x="-2" y="-2" width={path.n + 4} height={path.n + 4} fill="#ffffff" />
+          <path d={path.d} fill="#101610" />
         </svg>
+      ) : (
+        <div className="w-[180px] h-[180px] flex items-center justify-center text-center text-[11px] text-base-950 px-3">QR unavailable — pay to the UPI ID shown</div>
       )}
       <span className="text-[10px] font-bold text-base-700 mt-2">{label}</span>
     </div>
@@ -206,7 +185,7 @@ function QrDisplay({ payload, label }: { payload: string; label: string }) {
 }
 
 export function WalletPage() {
-  const { accountId, setAccountId } = useTerminal();
+  const { accountId, setAccountId } = useTerminal(useShallow((s) => ({ accountId: s.accountId, setAccountId: s.setAccountId })));
   const push = useUI((s) => s.push);
   const qc = useQueryClient();
   const nav = useNavigate();

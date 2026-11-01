@@ -7,9 +7,10 @@ import { fmtDur, type OptionTrade } from '../../lib/options';
 import { DirBadge, ResultBadge } from '../../components/trading/TradesPanel';
 import { Empty } from '../../components/ui/primitives';
 import { clsx } from 'clsx';
+import { useShallow } from 'zustand/react/shallow';
 
 export function HistoryPage() {
-  const { accountId } = useTerminal();
+  const { accountId } = useTerminal(useShallow((s) => ({ accountId: s.accountId })));
   const [result, setResult] = useState('');
   const [page, setPage] = useState(1);
   const { data, isLoading } = useQuery({

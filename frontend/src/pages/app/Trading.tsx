@@ -14,6 +14,7 @@ import { getAssetMeta } from '../../lib/assetMeta';
 import { effectivePayoutPct, type OptionTrade, type OptionsConfig } from '../../lib/options';
 import { clsx } from 'clsx';
 import { fmtPrice } from '../../lib/format';
+import { useShallow } from 'zustand/react/shallow';
 
 interface AssetRow { symbol: string; name: string; category: string; enabled: boolean; payoutPct?: number }
 /** Effective payout % and OTC flag per symbol, for the ticket's current trade length. */
@@ -48,7 +49,7 @@ function TabQuote({ symbol }: { symbol: string }) {
 
 /** Instrument tabs above the chart. */
 function AssetTabs({ onOpenSelector }: { onOpenSelector: () => void }) {
-  const { symbol, setSymbol, openTabs, closeTab } = useTerminal();
+  const { symbol, setSymbol, openTabs, closeTab } = useTerminal(useShallow((s) => ({ symbol: s.symbol, setSymbol: s.setSymbol, openTabs: s.openTabs, closeTab: s.closeTab })));
   const payoutInfo = usePayoutInfo();
 
   return (
@@ -106,7 +107,7 @@ function AssetTabs({ onOpenSelector }: { onOpenSelector: () => void }) {
 
 /** Quotex Asset Selector Modal */
 function AssetSelectorModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
-  const { addTab } = useTerminal();
+  const { addTab } = useTerminal(useShallow((s) => ({ addTab: s.addTab })));
   const [q, setQ] = useState('');
   const [cat, setCat] = useState<'ALL' | 'CURRENCIES' | 'CRYPTO' | 'COMMODITIES'>('ALL');
 
@@ -210,7 +211,7 @@ function AssetSelectorModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
 
 /** Quotex "Trades" panel: Opened (pending + running) and Closed tabs. */
 function TradesPanel({ onClose }: { onClose?: () => void }) {
-  const { accountId } = useTerminal();
+  const { accountId } = useTerminal(useShallow((s) => ({ accountId: s.accountId })));
   const [tab, setTab] = useState<'open' | 'closed'>('open');
   const { data: open } = useQuery({
     queryKey: ['options', 'open', accountId],

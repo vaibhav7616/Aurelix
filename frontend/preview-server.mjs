@@ -14,6 +14,28 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
 
 const shouldProxy = (p) => p === '/ready' || p.startsWith('/api/') || p.startsWith('/socket.io');
 
+// Content-Security-Policy for the built app (production only — the Vite dev server needs inline
+// scripts for hot reload). Scripts only from this origin: an injected <script> cannot run, which
+// matters because session tokens live in localStorage.
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com data:",
+  "img-src 'self' data: blob:",
+  "connect-src 'self' ws: wss:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join('; ');
+const SECURITY_HEADERS = {
+  'Content-Security-Policy': CSP,
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
+};
+
 function proxyHttp(req, res) {
   const upstream = http.request(
     { host: API_HOST, port: API_PORT, path: req.url, method: req.method, headers: { ...req.headers, host: `${API_HOST}:${API_PORT}` } },
@@ -31,7 +53,7 @@ const server = http.createServer((req, res) => {
     if (!file.startsWith(root)) { res.writeHead(403); res.end(); return; }
     if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(root, 'index.html');
     const ext = path.extname(file).toLowerCase();
-    res.writeHead(200, { 'Content-Type': MIME[ext] ?? 'application/octet-stream', 'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=3600' });
+    res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': MIME[ext] ?? 'application/octet-stream', 'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=3600' });
     fs.createReadStream(file).pipe(res);
   } catch { res.writeHead(500); res.end('error'); }
 });

@@ -70,10 +70,12 @@ export function LeaderboardPage() {
   const top1 = topTraders[0];
   const top2 = topTraders[1];
   const top3 = topTraders[2];
-  const rest = topTraders.slice(3);
+  // podium needs three traders; with fewer, everyone is listed in the table
+  const showPodium = !!(top1 && top2 && top3);
+  const rest = showPodium ? topTraders.slice(3) : topTraders;
 
   const filteredRest = rest.filter((t) =>
-    search ? `${t.name} ${t.country} ${t.favoriteAsset}`.toLowerCase().includes(search.toLowerCase()) : true
+    search ? `${t.name} ${t.favoriteAsset}`.toLowerCase().includes(search.toLowerCase()) : true
   );
 
   return (
@@ -82,20 +84,15 @@ export function LeaderboardPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-line pb-4">
         <div>
           <div className="flex items-center gap-2.5">
-            <span className="text-2xl">🏆</span>
-            <h1 className="text-xl font-bold tracking-tight text-cream">Top 50 Traders of the Day</h1>
-            <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-warn/15 text-warn border border-warn/30">
-              DAILY LEADERBOARD
-            </span>
+            <h1 className="text-xl font-semibold tracking-tight text-cream">Top traders today</h1>
           </div>
           <p className="text-xs text-mute mt-1">
-            Real-time ranking of top binary options traders ranked by daily net profit.
+            Net profit of live-account trades settled today (UTC). Demo trades are not ranked. Names are shortened for privacy.
           </p>
         </div>
 
         {/* Daily Reset Countdown Badge */}
         <div className="bg-base-900 border border-line px-3.5 py-2 rounded-md flex items-center gap-3 shrink-0 shadow-sm">
-          <div className="w-2.5 h-2.5 rounded-full bg-up animate-pulse" />
           <div className="text-right">
             <div className="text-[10px] uppercase font-bold text-mute">Daily Reset in (00:00 UTC)</div>
             <div className="text-sm font-mono font-bold text-warn tracking-wider">
@@ -108,43 +105,43 @@ export function LeaderboardPage() {
       {/* ── Platform Summary Stats ─────────────────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="bg-gradient-to-br from-base-900 to-base-800 p-4 rounded-md border border-line shadow-sm">
-          <div className="text-[11px] font-bold text-mute uppercase tracking-wider">Total Profits Paid Today</div>
+          <div className="text-[11px] font-bold text-mute uppercase tracking-wider">Profit of ranked traders</div>
           <div className="text-2xl font-bold font-mono text-up mt-1">
             {resp ? fmtMoney(resp.totalPaidProfit) : '—'}
           </div>
           <div className="text-[10px] text-mute mt-1 flex items-center gap-1">
-            <span>⚡ Automated instant settlements</span>
+            <span>Sum of today's positive results</span>
           </div>
         </div>
 
         <div className="bg-gradient-to-br from-base-900 to-base-800 p-4 rounded-md border border-line shadow-sm">
-          <div className="text-[11px] font-bold text-mute uppercase tracking-wider">Active Traders Today</div>
+          <div className="text-[11px] font-bold text-mute uppercase tracking-wider">Traders today</div>
           <div className="text-2xl font-bold font-mono text-cream mt-1">
             {resp ? resp.activeTradersCount.toLocaleString() : '—'}
           </div>
-          <div className="text-[10px] text-mute mt-1">Global active community</div>
+          <div className="text-[10px] text-mute mt-1">With at least one settled trade</div>
         </div>
 
         <div className="bg-gradient-to-br from-base-900 to-base-800 p-4 rounded-md border border-line shadow-sm">
-          <div className="text-[11px] font-bold text-mute uppercase tracking-wider">Highest Single Profit</div>
+          <div className="text-[11px] font-bold text-mute uppercase tracking-wider">Best result today</div>
           <div className="text-2xl font-bold font-mono text-warn mt-1">
             {top1 ? fmtMoney(top1.profit) : '—'}
           </div>
-          <div className="text-[10px] text-mute mt-1">Earned by #1 Champion</div>
+          <div className="text-[10px] text-mute mt-1">Rank #1 net profit</div>
         </div>
       </div>
 
       {/* ── TOP 3 PODIUM SHOWCASE ──────────────────────────────────── */}
-      {top1 && top2 && top3 && (
+      {showPodium && top1 && top2 && top3 && (
         <div className="grid md:grid-cols-3 gap-4 pt-4 items-end">
           {/* #2 Runner-Up */}
           <div className="order-2 md:order-1 bg-gradient-to-t from-base-950/90 to-base-900 border border-mute/40 rounded-lg p-5 text-center relative shadow-lg hover:border-fog transition">
             <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full bg-fog text-base-950 font-bold text-[11px] shadow">
               🥈 2nd PLACE
             </div>
-            <div className="text-3xl my-2">{top2.flag}</div>
+            <div className="my-2" />
             <div className="text-sm font-semibold text-cream truncate">{top2.name}</div>
-            <div className="text-[11px] text-mute">{top2.country}</div>
+            <div className="text-[11px] text-mute">{top2.favoriteAsset || '—'}</div>
             <div className="text-2xl font-bold font-mono text-ink1 mt-3">
               +{fmtMoney(top2.profit)}
             </div>
@@ -166,9 +163,9 @@ export function LeaderboardPage() {
               <span>👑</span>
               <span>1st CHAMPION</span>
             </div>
-            <div className="text-4xl my-2">{top1.flag}</div>
+            <div className="my-2" />
             <div className="text-base font-bold text-cream truncate">{top1.name}</div>
-            <div className="text-xs text-warn font-semibold">{top1.country} · {top1.favoriteAsset}</div>
+            <div className="text-xs text-warn font-semibold">{top1.favoriteAsset || '—'}</div>
             <div className="text-3xl font-bold font-mono text-warn mt-3 drop-shadow">
               +{fmtMoney(top1.profit)}
             </div>
@@ -189,9 +186,9 @@ export function LeaderboardPage() {
             <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full bg-warn text-cream font-bold text-[11px] shadow">
               🥉 3rd PLACE
             </div>
-            <div className="text-3xl my-2">{top3.flag}</div>
+            <div className="my-2" />
             <div className="text-sm font-semibold text-cream truncate">{top3.name}</div>
-            <div className="text-[11px] text-mute">{top3.country}</div>
+            <div className="text-[11px] text-mute">{top3.favoriteAsset || '—'}</div>
             <div className="text-2xl font-bold font-mono text-warn mt-3">
               +{fmtMoney(top3.profit)}
             </div>
@@ -212,14 +209,14 @@ export function LeaderboardPage() {
       {/* ── Search & Filter Bar ────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-bold text-cream uppercase tracking-wider">Ranks #4 to #50</span>
+          <span className="text-xs font-bold text-cream uppercase tracking-wider">{showPodium ? 'Ranks #4 to #50' : 'Ranking'}</span>
           <span className="text-[10px] text-mute">({filteredRest.length} traders)</span>
         </div>
 
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by trader name, country, or asset…"
+          placeholder="Search by trader or market…"
           className="ax-input !h-8 !text-xs !w-full sm:!w-[280px]"
         />
       </div>
@@ -230,7 +227,7 @@ export function LeaderboardPage() {
           <table className="w-full text-xs">
             <thead>
               <tr>
-                {['Rank', 'Trader', 'Country', 'Today Profit', 'Win Rate', 'Trades', 'Favorite Market'].map((h) => (
+                {['Rank', 'Trader', 'Today Profit', 'Win Rate', 'Trades', 'Favorite Market'].map((h) => (
                   <th key={h} className={clsx('ax-th', h === 'Today Profit' && 'text-right')}>{h}</th>
                 ))}
               </tr>
@@ -258,7 +255,7 @@ export function LeaderboardPage() {
                   <td className="ax-td">
                     <div className="flex items-center gap-2">
                       <div className="w-6 h-6 rounded-full bg-base-800 border border-line flex items-center justify-center text-[10px]">
-                        {t.flag}
+                        {t.name.slice(0, 1).toUpperCase()}
                       </div>
                       <span className={clsx('font-bold', t.isCurrentUser ? 'text-up' : 'text-cream')}>
                         {t.name}
@@ -268,14 +265,6 @@ export function LeaderboardPage() {
                           YOU
                         </span>
                       )}
-                    </div>
-                  </td>
-
-                  {/* Country */}
-                  <td className="ax-td text-mute">
-                    <div className="flex items-center gap-1.5">
-                      <span>{t.flag}</span>
-                      <span>{t.country}</span>
                     </div>
                   </td>
 
@@ -308,6 +297,13 @@ export function LeaderboardPage() {
                   </td>
                 </tr>
               ))}
+              {!isLoading && !filteredRest.length && (
+                <tr>
+                  <td colSpan={6} className="ax-td text-center text-mute py-8 whitespace-normal">
+                    {search ? 'No traders match your search.' : 'No live trader has a positive result yet today. Live trades settled at a profit appear here.'}
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -324,7 +320,7 @@ export function LeaderboardPage() {
               <div className="text-xs font-bold text-cream flex items-center gap-2">
                 <span>Your Daily Rank:</span>
                 <span className="font-mono font-bold text-up text-sm">
-                  #{resp?.currentUser.rank ?? '—'}
+                  {resp?.currentUser.rank ? `#${resp.currentUser.rank}` : '—'}
                 </span>
                 {resp?.currentUser.inTop50 ? (
                   <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-up text-base-950 uppercase">
@@ -337,7 +333,7 @@ export function LeaderboardPage() {
                 )}
               </div>
               <div className="text-[11px] text-mute">
-                Today Profit: <span className="text-cream font-mono font-bold">+{fmtMoney(resp?.currentUser.profit ?? 0)}</span> · Trades: {resp?.currentUser.tradesCount ?? 0} · Win Rate: {resp?.currentUser.winRate ?? 0}%
+                Today Profit: <span className={clsx('font-mono font-bold', (resp?.currentUser.profit ?? 0) < 0 ? 'text-down' : 'text-cream')}>{(resp?.currentUser.profit ?? 0) > 0 ? '+' : (resp?.currentUser.profit ?? 0) < 0 ? '−' : ''}{fmtMoney(Math.abs(resp?.currentUser.profit ?? 0))}</span> · Trades: {resp?.currentUser.tradesCount ?? 0} · Win Rate: {resp?.currentUser.winRate ?? 0}%
               </div>
             </div>
           </div>

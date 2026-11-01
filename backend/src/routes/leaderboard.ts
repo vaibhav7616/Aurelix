@@ -1,13 +1,20 @@
+// Daily leaderboard — built ONLY from real settled trades (UTC day). Nothing is generated.
+//
+// Ranking: net profit of settled fixed-time trades today, per user, on LIVE accounts only (demo
+// results never appear). Only traders with a positive result are ranked. Other traders are shown by a masked handle (usernames are derived from email
+// addresses at registration); the viewer sees their own name.
 import { Router, Request } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database';
 import { ah } from '../utils/asyncHandler';
 import { verifyAccess } from '../utils/jwt';
+import { utcDayStart } from '../utils/time';
 
 const r = Router();
+const TOP_N = 50;
 
 interface LeaderboardTrader {
   rank: number;
-  userId?: string;
   name: string;
   country: string;
   countryCode: string;
@@ -19,230 +26,85 @@ interface LeaderboardTrader {
   isCurrentUser?: boolean;
 }
 
-// 50 realistic global traders with authentic country diversity matching Quotex
-const BASE_TRADERS: Array<{ name: string; country: string; countryCode: string; flag: string; asset: string }> = [
-  { name: 'Alexander_V', country: 'Brazil', countryCode: 'BR', flag: '🇧🇷', asset: 'EUR/USD OTC' },
-  { name: 'Aarav_ProTrader', country: 'India', countryCode: 'IN', flag: '🇮🇳', asset: 'USD/INR OTC' },
-  { name: 'Lucas_Silva', country: 'Brazil', countryCode: 'BR', flag: '🇧🇷', asset: 'GBP/USD OTC' },
-  { name: 'Devendra_FX', country: 'India', countryCode: 'IN', flag: '🇮🇳', asset: 'EUR/USD OTC' },
-  { name: 'Nguyen_Van', country: 'Vietnam', countryCode: 'VN', flag: '🇻🇳', asset: 'BTC/USD' },
-  { name: 'Zaid_AlMansoor', country: 'UAE', countryCode: 'AE', flag: '🇦🇪', asset: 'XAU/USD' },
-  { name: 'Budi_Santoso', country: 'Indonesia', countryCode: 'ID', flag: '🇮🇩', asset: 'USD/JPY OTC' },
-  { name: 'Rodrigo_M', country: 'Brazil', countryCode: 'BR', flag: '🇧🇷', asset: 'EUR/GBP OTC' },
-  { name: 'Vikram_Options', country: 'India', countryCode: 'IN', flag: '🇮🇳', asset: 'EUR/USD OTC' },
-  { name: 'Mateo_Romero', country: 'Mexico', countryCode: 'MX', flag: '🇲🇽', asset: 'USD/MXN OTC' },
-  { name: 'Klaus_Weber', country: 'Germany', countryCode: 'DE', flag: '🇩🇪', asset: 'EUR/CHF OTC' },
-  { name: 'Oliver_Smith', country: 'United Kingdom', countryCode: 'GB', flag: '🇬🇧', asset: 'GBP/USD OTC' },
-  { name: 'Carlos_Binary', country: 'Colombia', countryCode: 'CO', flag: '🇨🇴', asset: 'EUR/USD OTC' },
-  { name: 'Somchai_Trade', country: 'Thailand', countryCode: 'TH', flag: '🇹🇭', asset: 'USD/THB OTC' },
-  { name: 'Rohit_Scalper', country: 'India', countryCode: 'IN', flag: '🇮🇳', asset: 'BTC/USD' },
-  { name: 'Gabriel_Invest', country: 'Brazil', countryCode: 'BR', flag: '🇧🇷', asset: 'XAU/USD' },
-  { name: 'Minh_Trader', country: 'Vietnam', countryCode: 'VN', flag: '🇻🇳', asset: 'EUR/USD OTC' },
-  { name: 'Tariq_Crypto', country: 'UAE', countryCode: 'AE', flag: '🇦🇪', asset: 'ETH/USD' },
-  { name: 'Felipe_OTC', country: 'Brazil', countryCode: 'BR', flag: '🇧🇷', asset: 'USD/CAD OTC' },
-  { name: 'Priya_Kapoor', country: 'India', countryCode: 'IN', flag: '🇮🇳', asset: 'EUR/USD OTC' },
-  { name: 'Dimas_W', country: 'Indonesia', countryCode: 'ID', flag: '🇮🇩', asset: 'AUD/USD OTC' },
-  { name: 'Christian_P', country: 'Philippines', countryCode: 'PH', flag: '🇵🇭', asset: 'EUR/USD OTC' },
-  { name: 'Hamdan_Capital', country: 'UAE', countryCode: 'AE', flag: '🇦🇪', asset: 'XAU/USD' },
-  { name: 'Santiago_FX', country: 'Argentina', countryCode: 'AR', flag: '🇦🇷', asset: 'EUR/USD OTC' },
-  { name: 'Ananya_Trade', country: 'India', countryCode: 'IN', flag: '🇮🇳', asset: 'USD/JPY OTC' },
-  { name: 'Tiago_Alves', country: 'Portugal', countryCode: 'PT', flag: '🇵🇹', asset: 'EUR/USD OTC' },
-  { name: 'Lukas_Hoffman', country: 'Germany', countryCode: 'DE', flag: '🇩🇪', asset: 'EUR/GBP OTC' },
-  { name: 'Rian_Kurniawan', country: 'Indonesia', countryCode: 'ID', flag: '🇮🇩', asset: 'GBP/JPY OTC' },
-  { name: 'Hoang_Binary', country: 'Vietnam', countryCode: 'VN', flag: '🇻🇳', asset: 'BTC/USD' },
-  { name: 'Aditya_Sharma', country: 'India', countryCode: 'IN', flag: '🇮🇳', asset: 'EUR/USD OTC' },
-  { name: 'Bruno_Carvalho', country: 'Brazil', countryCode: 'BR', flag: '🇧🇷', asset: 'USD/CHF OTC' },
-  { name: 'Diego_Montes', country: 'Spain', countryCode: 'ES', flag: '🇪🇸', asset: 'EUR/USD OTC' },
-  { name: 'Sanjay_Patel', country: 'India', countryCode: 'IN', flag: '🇮🇳', asset: 'GBP/USD OTC' },
-  { name: 'Arthur_Pendelton', country: 'South Africa', countryCode: 'ZA', flag: '🇿🇦', asset: 'XAU/USD' },
-  { name: 'Nguyen_Duc', country: 'Vietnam', countryCode: 'VN', flag: '🇻🇳', asset: 'EUR/JPY OTC' },
-  { name: 'Eko_Prasetyo', country: 'Indonesia', countryCode: 'ID', flag: '🇮🇩', asset: 'EUR/USD OTC' },
-  { name: 'Manish_Verma', country: 'India', countryCode: 'IN', flag: '🇮🇳', asset: 'AUD/CAD OTC' },
-  { name: 'Gustavo_Lima', country: 'Brazil', countryCode: 'BR', flag: '🇧🇷', asset: 'BTC/USD' },
-  { name: 'Thanh_Tung', country: 'Vietnam', countryCode: 'VN', flag: '🇻🇳', asset: 'EUR/USD OTC' },
-  { name: 'Karan_Malhotra', country: 'India', countryCode: 'IN', flag: '🇮🇳', asset: 'USD/CAD OTC' },
-  { name: 'Leandro_Rossi', country: 'Italy', countryCode: 'IT', flag: '🇮🇹', asset: 'EUR/USD OTC' },
-  { name: 'Farhan_Akhtar', country: 'Pakistan', countryCode: 'PK', flag: '🇵🇰', asset: 'GBP/USD OTC' },
-  { name: 'Andre_Souza', country: 'Brazil', countryCode: 'BR', flag: '🇧🇷', asset: 'EUR/USD OTC' },
-  { name: 'Rajesh_Kumar', country: 'India', countryCode: 'IN', flag: '🇮🇳', asset: 'USD/INR OTC' },
-  { name: 'Kenji_Sato', country: 'Japan', countryCode: 'JP', flag: '🇯🇵', asset: 'USD/JPY OTC' },
-  { name: 'Vitor_Hugo', country: 'Brazil', countryCode: 'BR', flag: '🇧🇷', asset: 'EUR/USD OTC' },
-  { name: 'Arjun_Reddy', country: 'India', countryCode: 'IN', flag: '🇮🇳', asset: 'XAU/USD' },
-  { name: 'Hassan_AlSayed', country: 'Egypt', countryCode: 'EG', flag: '🇪🇬', asset: 'EUR/USD OTC' },
-  { name: 'Murilo_Santos', country: 'Brazil', countryCode: 'BR', flag: '🇧🇷', asset: 'GBP/JPY OTC' },
-  { name: 'Deepak_Yadav', country: 'India', countryCode: 'IN', flag: '🇮🇳', asset: 'EUR/USD OTC' },
-];
+const round2 = (n: number) => Math.round(n * 100) / 100;
 
-/** Simple deterministic pseudo-random number generator for consistent daily scores */
-function mulberry32(seed: number) {
-  return function () {
-    let t = (seed += 0x6d2b79f5);
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+/** "demotrader" → "de***r": recognisable to its owner, not a public copy of an email name. */
+export function maskHandle(name: string): string {
+  const s = name.trim();
+  if (s.length <= 3) return `${s.slice(0, 1)}***`;
+  return `${s.slice(0, 2)}***${s.slice(-1)}`;
+}
+
+function viewerId(req: Request): string | null {
+  const h = req.headers.authorization ?? '';
+  if (!h.startsWith('Bearer ')) return null;
+  try { return verifyAccess(h.slice(7)).sub; } catch { return null; }
 }
 
 r.get('/', ah(async (req: Request, res) => {
-  // Extract optional user token
-  let currentUserId: string | null = null;
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    try {
-      const claims = verifyAccess(authHeader.slice(7));
-      currentUserId = claims.sub;
-    } catch { /* guest */ }
+  const since = utcDayStart();
+  const where: Prisma.BinaryOptionWhereInput = { status: { in: ['WON', 'LOST', 'TIE'] }, settledAt: { gte: since }, account: { accountType: 'LIVE' } };
+
+  const [byUser, byOutcome, byAsset] = await Promise.all([
+    prisma.binaryOption.groupBy({ by: ['userId'], where, _sum: { profit: true }, _count: { _all: true } }),
+    prisma.binaryOption.groupBy({ by: ['userId', 'status'], where, _count: { _all: true } }),
+    prisma.binaryOption.groupBy({ by: ['userId', 'assetId'], where, _count: { _all: true } }),
+  ]);
+
+  const assets = new Map((await prisma.asset.findMany({ select: { id: true, symbol: true } })).map((a) => [a.id, a.symbol]));
+  const stats = new Map(byUser.map((u) => [u.userId, { profit: round2(Number(u._sum.profit ?? 0)), trades: u._count._all, wins: 0, decided: 0, fav: '', favN: 0 }]));
+  for (const o of byOutcome) {
+    const s = stats.get(o.userId);
+    if (!s) continue;
+    if (o.status === 'WON') s.wins += o._count._all;
+    if (o.status !== 'TIE') s.decided += o._count._all;
+  }
+  for (const a of byAsset) {
+    const s = stats.get(a.userId);
+    if (s && a._count._all > s.favN) { s.favN = a._count._all; s.fav = assets.get(a.assetId) ?? ''; }
   }
 
-  // 1. Calculate reset countdown (resets at 00:00:00 UTC)
-  const now = new Date();
-  const dateStr = now.toISOString().split('T')[0];
-  const startOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const endOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
-  const resetsInSeconds = Math.max(0, Math.floor((endOfDay.getTime() - now.getTime()) / 1000));
+  const ranked = [...stats.entries()].filter(([, s]) => s.profit > 0).sort((a, b) => b[1].profit - a[1].profit);
+  const me = viewerId(req);
+  const top = ranked.slice(0, TOP_N);
+  const users = new Map((await prisma.user.findMany({
+    where: { id: { in: [...top.map(([id]) => id), ...(me ? [me] : [])] } },
+    select: { id: true, username: true, firstName: true },
+  })).map((u) => [u.id, u]));
+  const handle = (id: string) => { const u = users.get(id); return u?.username || u?.firstName || 'trader'; };
 
-  // 2. Fetch real user today's settled binary options from database
-  let currentUserStats: {
-    profit: number;
-    tradesCount: number;
-    winCount: number;
-    winRate: number;
-    name: string;
-  } = {
-    profit: 0,
-    tradesCount: 0,
-    winCount: 0,
-    winRate: 0,
-    name: 'You',
-  };
+  const topTraders: LeaderboardTrader[] = top.map(([id, s], i) => ({
+    rank: i + 1,
+    name: id === me ? `${handle(id)} (You)` : maskHandle(handle(id)),
+    country: '', countryCode: '', flag: '',
+    profit: s.profit,
+    tradesCount: s.trades,
+    winRate: s.decided ? Math.round((s.wins / s.decided) * 100) : 0,
+    favoriteAsset: s.fav,
+    ...(id === me ? { isCurrentUser: true } : {}),
+  }));
 
-  if (currentUserId) {
-    const [userRow, todayOptions] = await Promise.all([
-      prisma.user.findUnique({
-        where: { id: currentUserId },
-        select: { firstName: true, lastName: true, username: true, email: true },
-      }),
-      prisma.binaryOption.findMany({
-        where: {
-          userId: currentUserId,
-          settledAt: { gte: startOfDay },
-          status: { in: ['WON', 'LOST', 'TIE'] },
-        },
-      }),
-    ]);
-
-    if (userRow) {
-      currentUserStats.name = userRow.username || `${userRow.firstName} ${userRow.lastName}`.trim() || userRow.email.split('@')[0];
-    }
-
-    if (todayOptions.length > 0) {
-      let netProfit = 0;
-      let wins = 0;
-      for (const opt of todayOptions) {
-        if (opt.status === 'WON') {
-          wins++;
-          netProfit += Number(opt.profit ?? 0);
-        } else if (opt.status === 'LOST') {
-          netProfit -= Number(opt.stake);
-        }
-      }
-      currentUserStats.profit = Math.max(0, netProfit);
-      currentUserStats.tradesCount = todayOptions.length;
-      currentUserStats.winCount = wins;
-      currentUserStats.winRate = Math.round((wins / todayOptions.length) * 100);
-    }
-  }
-
-  // 3. Generate deterministic daily leaderboard using date as seed
-  let seed = 0;
-  for (let i = 0; i < dateStr.length; i++) {
-    seed = (seed << 5) - seed + dateStr.charCodeAt(i);
-    seed |= 0;
-  }
-  const rand = mulberry32(Math.abs(seed));
-
-  // Generate 50 realistic rankings descending from ~$52,000 down to ~$1,200
-  const traders: LeaderboardTrader[] = [];
-  let currentProfitAnchor = 52000 + Math.round(rand() * 8000); // #1 champion profit
-
-  for (let i = 0; i < BASE_TRADERS.length; i++) {
-    const base = BASE_TRADERS[i];
-    // Smooth geometric decay for profit
-    const decay = 0.93 - i * 0.0012;
-    currentProfitAnchor = Math.max(1200, currentProfitAnchor * decay + (rand() * 300 - 150));
-    const profit = Math.round(currentProfitAnchor * 100) / 100;
-    const tradesCount = Math.floor(35 + rand() * 65);
-    const winRate = Math.round((74 + rand() * 19) * 10) / 10;
-
-    traders.push({
-      rank: i + 1,
-      name: base.name,
-      country: base.country,
-      countryCode: base.countryCode,
-      flag: base.flag,
-      profit,
-      tradesCount,
-      winRate,
-      favoriteAsset: base.asset,
-    });
-  }
-
-  // 4. If current user has real profit today, merge user dynamically into leaderboard
-  let userRank = 0;
-  let inTop50 = false;
-
-  if (currentUserId && currentUserStats.profit > 0) {
-    const userTrader: LeaderboardTrader = {
-      rank: 0,
-      userId: currentUserId,
-      name: `${currentUserStats.name} (You)`,
-      country: 'Your Country',
-      countryCode: 'REAL',
-      flag: '🌟',
-      profit: currentUserStats.profit,
-      tradesCount: currentUserStats.tradesCount,
-      winRate: currentUserStats.winRate,
-      favoriteAsset: 'Live Terminal',
-      isCurrentUser: true,
-    };
-
-    // Find insertion index
-    const insertIdx = traders.findIndex((t) => currentUserStats.profit >= t.profit);
-    if (insertIdx !== -1 && insertIdx < 50) {
-      traders.splice(insertIdx, 0, userTrader);
-      traders.pop(); // keep exact 50
-      inTop50 = true;
-      userRank = insertIdx + 1;
-    } else {
-      userRank = 50 + Math.max(1, Math.floor(50 - (currentUserStats.profit / 1200) * 40));
-    }
-  }
-
-  // Re-assign ranks 1..50
-  for (let i = 0; i < traders.length; i++) {
-    traders[i].rank = i + 1;
-    if (traders[i].isCurrentUser) userRank = i + 1;
-  }
-
-  // Total paid out today across the platform
-  const totalPaidProfit = traders.reduce((acc, t) => acc + t.profit, 840000);
+  const mine = me ? stats.get(me) : undefined;
+  const myRank = me ? ranked.findIndex(([id]) => id === me) + 1 : 0;
+  const nextUtcMidnight = since.getTime() + 86_400_000;
 
   res.json({
     success: true,
     data: {
-      period: 'day',
-      date: dateStr,
-      resetsInSeconds,
-      totalPaidProfit,
-      activeTradersCount: 18450 + Math.floor(rand() * 2500),
-      topTraders: traders,
+      period: 'daily',
+      accountType: 'LIVE',
+      date: since.toISOString().slice(0, 10),
+      resetsInSeconds: Math.max(0, Math.round((nextUtcMidnight - Date.now()) / 1000)),
+      totalPaidProfit: round2(ranked.reduce((a, [, s]) => a + s.profit, 0)),
+      activeTradersCount: stats.size,
+      topTraders,
       currentUser: {
-        rank: userRank || 84,
-        inTop50,
-        profit: currentUserStats.profit,
-        tradesCount: currentUserStats.tradesCount,
-        winRate: currentUserStats.winRate,
-        name: currentUserStats.name,
+        rank: myRank,
+        inTop50: myRank > 0 && myRank <= TOP_N,
+        profit: mine?.profit ?? 0,
+        tradesCount: mine?.trades ?? 0,
+        winRate: mine?.decided ? Math.round((mine.wins / mine.decided) * 100) : 0,
+        name: me ? handle(me) : '',
       },
     },
     error: null,

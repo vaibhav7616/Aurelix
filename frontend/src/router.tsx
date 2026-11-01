@@ -17,12 +17,13 @@ import { TopPage, SupportPage } from './pages/app/CommunityPages';
 import { AdminOverview, AdminUsers, AdminAccounts, AdminAssets, AdminMarket } from './pages/admin/AdminPages';
 import { AdminOptions, AdminOrders, AdminPositions, AdminTrades, AdminDeposits, AdminWithdrawals, AdminRisk, AdminBroadcast, AdminAudit, AdminSettings } from './pages/admin/AdminOps';
 import { useAuth } from './stores/authStore';
+import { hasSession } from './lib/api';
 import { RouteError } from './components/ui/RouteError';
 import type { ReactNode } from 'react';
 
 function Guard({ children, admin }: { children: ReactNode; admin?: boolean }) {
   const { user, ready } = useAuth();
-  const token = localStorage.getItem('ax_access') ?? sessionStorage.getItem('ax_access');
+  const token = hasSession();
 
   if (!ready && token) {
     return (

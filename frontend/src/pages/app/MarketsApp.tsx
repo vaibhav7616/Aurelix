@@ -4,11 +4,12 @@ import { get } from '../../lib/api';
 import { useTerminal } from '../../stores/terminalStore';
 import { fmtPrice, fmtPct, clsUpDown } from '../../lib/format';
 import { clsx } from 'clsx';
+import { useShallow } from 'zustand/react/shallow';
 
 interface Asset { symbol: string; name: string; category: string; enabled: boolean; payoutPct?: number; tick: { mid: number; bid: number; ask: number; changePct24h: number } | null }
 
 export function MarketsApp() {
-  const { ticks, setSymbol } = useTerminal();
+  const { ticks, setSymbol } = useTerminal(useShallow((s) => ({ ticks: s.ticks, setSymbol: s.setSymbol })));
   const { data } = useQuery({
     queryKey: ['assets'],
     queryFn: () => get<{ assets: Asset[] }>('/api/v1/assets'),

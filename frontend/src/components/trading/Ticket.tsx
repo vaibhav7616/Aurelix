@@ -12,6 +12,7 @@ import { useSignalsStore } from '../../stores/signalsStore';
 import { FieldError } from '../ui/primitives';
 import { clsx } from 'clsx';
 import { uuid } from '../../lib/uuid';
+import { useShallow } from 'zustand/react/shallow';
 
 interface Account { id: string; balance: number; lockedBalance?: number; accountNumber: string; accountType: string }
 
@@ -67,7 +68,7 @@ function Box({ label, action, children }: { label: string; action?: { text: stri
 }
 
 export function Ticket() {
-  const { symbol, ticks, accountId, pendingTrade, setPendingTrade, setPendingDuration, setPreviewExpiry, setHoverDir } = useTerminal();
+  const { symbol, tick, accountId, pendingTrade, setPendingTrade, setPendingDuration, setPreviewExpiry, setHoverDir } = useTerminal(useShallow((s) => ({ symbol: s.symbol, tick: s.ticks[s.symbol], accountId: s.accountId, pendingTrade: s.pendingTrade, setPendingTrade: s.setPendingTrade, setPendingDuration: s.setPendingDuration, setPreviewExpiry: s.setPreviewExpiry, setHoverDir: s.setHoverDir })));
   const push = useUI((s) => s.push);
   const qc = useQueryClient();
   const [durationSec, setDurationSec] = useState<number>(() => Number(localStorage.getItem('ax_opt_dur') ?? 60) || 60);
@@ -116,7 +117,6 @@ export function Ticket() {
   const account = accounts?.find((a) => a.id === accountId) ?? accounts?.[0];
   const meta = cfg?.assets.find((a) => a.symbol === symbol);
   const assetInfo = getAssetMeta(symbol);
-  const tick = ticks[symbol];
   // payout depends on the trade length (and OTC) — the server locks the same % in when the trade opens
   const tradeSec = mode === 'TIME' ? Math.max(1, Math.round((fixedExpiry - serverNow()) / 1000)) : durationSec;
   const payoutPct = effectivePayoutPct(meta?.payoutPct ?? assetInfo.defaultPayout ?? 80, tradeSec, meta?.otc ?? true, cfg?.payoutRules);

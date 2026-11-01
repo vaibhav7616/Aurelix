@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { get, post, setTokens, isRemembered, getAccessToken } from '../lib/api';
+import { get, post, isRemembered, hasSession, setSession, clearSession, refreshAccess } from '../lib/api';
 
 export interface User { id: string; email: string; firstName: string; lastName: string; role: string }
 
@@ -28,28 +28,26 @@ export const useAuth = create<AuthState>((set) => ({
     } else {
       payload.username = cleanId;
     }
-    const data = await post<{ accessToken: string; refreshToken: string; user: User }>('/api/v1/auth/login', payload);
-    setTokens(data.accessToken, data.refreshToken, remember);
+    const data = await post<{ accessToken: string; user: User }>('/api/v1/auth/login', { ...payload, remember });
+    setSession(data.accessToken, remember); // the refresh token arrives as an HttpOnly cookie
     set({ user: data.user, remember, ready: true });
   },
   register: async (input) => {
     await post('/api/v1/auth/register', input);
   },
   logout: async () => {
-    try {
-      const rt = localStorage.getItem('ax_refresh') ?? sessionStorage.getItem('ax_refresh');
-      await post('/api/v1/auth/logout', { refreshToken: rt });
-    } catch { /* ignore */ }
-    setTokens(null, null);
+    try { await post('/api/v1/auth/logout', {}); } catch { /* ignore */ }
+    clearSession();
     set({ user: null });
   },
   bootstrap: async () => {
-    if (!getAccessToken()) { set({ ready: true }); return; }
+    if (!hasSession()) { set({ ready: true }); return; }
     try {
+      await refreshAccess(); // silent sign-in from the session cookie
       const me = await get<any>('/api/v1/auth/me').catch(() => get<any>('/api/v1/users/me'));
       const u = me?.user ?? me;
       if (u?.id) set({ user: u });
-    } catch { setTokens(null, null); }
+    } catch { clearSession(); }
     set({ ready: true });
   },
 }));

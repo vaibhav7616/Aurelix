@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import { prisma } from '../config/database';
 import { ah } from '../utils/asyncHandler';
@@ -12,6 +12,7 @@ import { requireAuth, AuthedRequest } from '../middleware/auth';
 import { env } from '../config/env';
 import { accountNumber } from '../trading/executionEngine';
 import { loginIpLimiter, loginAccountLimiter } from '../middleware/rateLimit';
+import { hashToken } from '../utils/tokenHash';
 
 const r = Router();
 
@@ -42,227 +43,120 @@ r.post('/register', loginIpLimiter, validateBody(registerSchema), ah(async (req,
   res.status(201).json({ success: true, data: { id: user.id, email: user.email }, error: null });
 }));
 
-r.post('/login', loginIpLimiter, loginAccountLimiter, async (req, res) => {
-  try {
-    const body = (req.body ?? {}) as Record<string, any>;
-    const id = String(body.identifier ?? body.email ?? body.username ?? '').trim();
-    const password = String(body.password ?? '');
+// ── refresh-token cookie ────────────────────────────────────────────────────────────────
+// HttpOnly: page scripts (and therefore XSS) can never read it. SameSite=Strict + a path limited to
+// /api/v1/auth: the browser only sends it to the auth endpoints, never cross-site. Secure whenever
+// the request came in over HTTPS (behind the proxy, via `trust proxy`).
+const RT_COOKIE = 'ax_rt';
+const SESSION_MS = 7 * 86400_000;
+/** a second refresh with the same token inside this window is a parallel tab, not theft */
+const ROTATION_GRACE_MS = 30_000;
+const cookieOpts = (req: Request) => ({ httpOnly: true, sameSite: 'strict' as const, secure: req.secure, path: '/api/v1/auth' });
+function setRefreshCookie(req: Request, res: Response, token: string, persistent: boolean) {
+  res.cookie(RT_COOKIE, token, { ...cookieOpts(req), ...(persistent ? { maxAge: SESSION_MS } : {}) });
+}
+function clearRefreshCookie(req: Request, res: Response) {
+  res.clearCookie(RT_COOKIE, cookieOpts(req));
+}
+async function createSession(req: Request, userId: string, persistent: boolean): Promise<string> {
+  const token = signRefresh({ sub: userId, sid: randomUUID() });
+  await prisma.session.create({
+    data: { userId, refreshToken: hashToken(token), persistent, userAgent: String(req.headers['user-agent'] ?? '').slice(0, 255), ipAddress: req.ip ?? null, expiresAt: new Date(Date.now() + SESSION_MS) },
+  });
+  return token;
+}
 
-    if (!id || !password) {
-      return res.status(400).json({
-        success: false,
-        data: null,
-        error: { code: 'INVALID_CREDENTIALS', message: 'Username/email and password are required' },
-      });
-    }
+/** bcrypt hash of a random string: compared against when the user does not exist, so a login
+ * attempt takes the same time either way and response timing cannot reveal which accounts exist. */
+const DUMMY_HASH = '$2a$12$C6UzMDM.H6dfI/f/IKcEeO5gDdZQDOxaBf0AmtF7vI.zVnr0k2Yfq';
 
-    const isTargetAdmin = id.toLowerCase() === 'admin' || id.toLowerCase() === 'admin@aurelix.trade';
-    const isTargetDemo = id.toLowerCase() === 'demo' || id.toLowerCase() === 'demo@example.com';
+/** A user with no trading accounts (e.g. created by the seed) gets the same set as registration. */
+async function ensureAccounts(userId: string): Promise<void> {
+  const has = await prisma.account.count({ where: { userId } });
+  if (has) return;
+  const demo = await prisma.account.create({
+    data: { userId, accountNumber: accountNumber(), accountType: 'DEMO', currency: 'USD', balance: env.DEMO_STARTING_BALANCE, status: 'ACTIVE' },
+  });
+  await prisma.walletTransaction.create({
+    data: { accountId: demo.id, type: 'DEPOSIT', amount: env.DEMO_STARTING_BALANCE, balanceAfter: env.DEMO_STARTING_BALANCE, memo: 'Demo starting balance (simulated)' },
+  });
+  // live money only ever arrives through a verified deposit
+  await prisma.account.create({
+    data: { userId, accountNumber: accountNumber().replace('DEMO', 'REAL'), accountType: 'LIVE', currency: 'USD', balance: 0, status: 'ACTIVE' },
+  });
+}
 
-    let user = await (async () => {
-      if (id.includes('@')) {
-        return await prisma.user.findFirst({ where: { email: { equals: id, mode: 'insensitive' } } }).catch(() => null)
-          || await prisma.user.findFirst({ where: { email: id.toLowerCase() } }).catch(() => null);
-      }
-      let found = await prisma.user.findFirst({ where: { username: { equals: id, mode: 'insensitive' } } }).catch(() => null)
-        || await prisma.user.findFirst({ where: { username: id.toLowerCase() } }).catch(() => null);
-      if (!found && isTargetAdmin) {
-        found = await prisma.user.findFirst({ where: { OR: [{ email: 'admin@aurelix.trade' }, { role: 'ADMIN' }, { username: 'admin' }] } }).catch(() => null);
-      }
-      if (!found && isTargetDemo) {
-        found = await prisma.user.findFirst({ where: { OR: [{ email: 'demo@example.com' }, { username: 'demo' }] } }).catch(() => null);
-      }
-      return found;
-    })();
+r.post('/login', loginIpLimiter, loginAccountLimiter, validateBody(loginSchema), ah(async (req, res) => {
+  const body = req.body as { identifier?: string; email?: string; username?: string; password: string; remember?: boolean };
+  const id = String(body.identifier ?? body.email ?? body.username ?? '').trim();
+  const user = id.includes('@')
+    ? await prisma.user.findFirst({ where: { email: { equals: id, mode: 'insensitive' } } })
+    : await prisma.user.findFirst({ where: { username: { equals: id, mode: 'insensitive' } } });
 
-    // Self-healing fallback: if admin user record is missing, auto-create
-    if (!user && isTargetAdmin) {
-      const adminHash = await hashPassword('admin123');
-      user = await prisma.user.create({
-        data: {
-          email: 'admin@aurelix.trade',
-          username: 'admin',
-          passwordHash: adminHash,
-          firstName: 'Platform',
-          lastName: 'Admin',
-          role: 'ADMIN',
-          status: 'ACTIVE',
-          emailVerified: true,
-        },
-      }).catch(async () => {
-        // If email already exists, retrieve it
-        return await prisma.user.findFirst({ where: { email: 'admin@aurelix.trade' } }).catch(() => null);
-      });
-    }
-
-    // Self-healing fallback for demo user
-    if (!user && isTargetDemo) {
-      const demoHash = await hashPassword('Demo123!');
-      user = await prisma.user.create({
-        data: {
-          email: 'demo@example.com',
-          username: 'demo',
-          passwordHash: demoHash,
-          firstName: 'Demo',
-          lastName: 'Trader',
-          role: 'USER',
-          status: 'ACTIVE',
-          emailVerified: true,
-        },
-      }).catch(async () => {
-        return await prisma.user.findFirst({ where: { email: 'demo@example.com' } }).catch(() => null);
-      });
-    }
-
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        data: null,
-        error: { code: 'UNAUTHORIZED', message: 'Invalid username or password' },
-      });
-    }
-
-    if (user.status === 'SUSPENDED') {
-      return res.status(403).json({
-        success: false,
-        data: null,
-        error: { code: 'USER_SUSPENDED', message: 'Account is suspended' },
-      });
-    }
-
-    const isAdminUser = isTargetAdmin || user.role === 'ADMIN' || user.role === 'SUPER_ADMIN' || user.username?.toLowerCase() === 'admin' || user.email?.toLowerCase() === 'admin@aurelix.trade';
-    const isDemoUser = isTargetDemo || user.username?.toLowerCase() === 'demo' || user.email?.toLowerCase() === 'demo@example.com';
-
-    // Verify password with standard fallbacks for administrative & staging accounts
-    let isMatch = (await verifyPassword(password, user.passwordHash))
-      || (isAdminUser && (
-           password === 'admin' ||
-           password === 'admin123' ||
-           password === 'Admin123' ||
-           password === 'Admin123!' ||
-           password === 'admin@123' ||
-           password === 'admin@aurelix.trade' ||
-           password === 'password' ||
-           password === '12345678' ||
-           password === 'adminadmin' ||
-           password.length >= 4
-         ))
-      || (isDemoUser && (
-           password === 'demo' ||
-           password === 'demo123' ||
-           password === 'Demo123!' ||
-           password === 'password'
-         ));
-
-    // If admin password matched a fallback, update hash so it's permanently synced
-    if (isMatch && isAdminUser) {
-      user.role = 'ADMIN';
-      if (!user.username) user.username = 'admin';
-      try {
-        const newHash = await hashPassword(password);
-        user.passwordHash = newHash;
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { passwordHash: newHash, username: 'admin' },
-        }).catch(() => null);
-      } catch { /* non-fatal */ }
-    }
-
-    if (!isMatch) {
-      return res.status(401).json({
-        success: false,
-        data: null,
-        error: { code: 'UNAUTHORIZED', message: 'Invalid username or password' },
-      });
-    }
-
-    // Auto-provision accounts for admin if none exist
-    try {
-      const accts = await prisma.account.findMany({ where: { userId: user.id } }).catch(() => []);
-      if (!accts || accts.length === 0) {
-        const demoAcct = await prisma.account.create({
-          data: {
-            userId: user.id,
-            accountNumber: `AX-DEMO-${Math.floor(100000 + Math.random() * 900000)}`,
-            accountType: 'DEMO',
-            currency: 'USD',
-            balance: 50000,
-            status: 'ACTIVE',
-          },
-        }).catch(() => null);
-        if (demoAcct) {
-          await prisma.walletTransaction.create({
-            data: { accountId: demoAcct.id, type: 'DEPOSIT', amount: 50000, balanceAfter: 50000, memo: 'Demo starting balance' },
-          }).catch(() => null);
-        }
-        await prisma.account.create({
-          data: {
-            userId: user.id,
-            accountNumber: `AX-LIVE-${Math.floor(100000 + Math.random() * 900000)}`,
-            accountType: 'LIVE',
-            currency: 'USD',
-            balance: 10000,
-            status: 'ACTIVE',
-          },
-        }).catch(() => null);
-      }
-    } catch { /* best effort */ }
-
-    const sid = randomUUID();
-    const refreshToken = signRefresh({ sub: user.id, sid });
-
-    try {
-      await prisma.session.create({
-        data: { userId: user.id, refreshToken, userAgent: req.headers['user-agent'] || 'Terminal-Client', ipAddress: req.ip || '127.0.0.1', expiresAt: new Date(Date.now() + 7 * 86400_000) },
-      }).catch(() => null);
-    } catch { /* non-fatal session creation */ }
-
-    const accessToken = signAccess({ sub: user.id, email: user.email, role: user.role });
-
-    try {
-      await audit({ actorId: user.id, action: 'USER_LOGIN', entityType: 'User', entityId: user.id, ipAddress: req.ip, userAgent: req.headers['user-agent'] });
-    } catch { /* best effort */ }
-
-    return res.json({
-      success: true,
-      data: {
-        accessToken,
-        refreshToken,
-        user: {
-          id: user.id,
-          email: user.email,
-          username: user.username || 'admin',
-          firstName: user.firstName || 'Platform',
-          lastName: user.lastName || 'Admin',
-          role: user.role || 'ADMIN',
-        },
-      },
-      error: null,
-    });
-  } catch (err: any) {
-    return res.status(500).json({
-      success: false,
-      data: null,
-      error: { code: 'INTERNAL_ERROR', message: err?.message || 'Authentication error' },
-    });
+  // the password hash is the only thing that can authenticate a user
+  const ok = await verifyPassword(body.password, user?.passwordHash ?? DUMMY_HASH);
+  if (!user || !ok) {
+    await audit({ action: 'USER_LOGIN_FAILED', entityType: 'User', entityId: user?.id, metadata: { identifier: id.slice(0, 128) }, ipAddress: req.ip, userAgent: req.headers['user-agent'] });
+    throw Err.unauthorized('Invalid username or password');
   }
-});
+  if (user.status === 'SUSPENDED') throw Err.userSuspended();
 
-r.post('/refresh', validateBody(refreshSchema), ah(async (req, res) => {
-  const { refreshToken } = req.body as { refreshToken: string };
-  let claims;
-  try { claims = verifyRefresh(refreshToken); } catch { throw Err.unauthorized('Invalid refresh token'); }
-  const session = await prisma.session.findUnique({ where: { refreshToken } });
-  if (!session || session.revokedAt || session.expiresAt < new Date()) throw Err.unauthorized('Session expired');
-  const user = await prisma.user.findUnique({ where: { id: claims.sub } });
-  if (!user || user.status === 'SUSPENDED') throw Err.unauthorized('User unavailable');
+  await ensureAccounts(user.id);
+
+  const remember = body.remember !== false;
+  setRefreshCookie(req, res, await createSession(req, user.id, remember), remember);
   const accessToken = signAccess({ sub: user.id, email: user.email, role: user.role });
-  res.json({ success: true, data: { accessToken }, error: null });
+  await audit({ actorId: user.id, action: 'USER_LOGIN', entityType: 'User', entityId: user.id, ipAddress: req.ip, userAgent: req.headers['user-agent'] });
+
+  res.json({
+    success: true,
+    data: {
+      accessToken,
+      user: { id: user.id, email: user.email, username: user.username, firstName: user.firstName, lastName: user.lastName, role: user.role },
+    },
+    error: null,
+  });
+}));
+
+// Exchange the refresh cookie for a new access token AND a new refresh token (rotation).
+// Presenting an already-rotated token again means it was copied: every session of that user ends.
+r.post('/refresh', validateBody(refreshSchema), ah(async (req, res) => {
+  const token = (req.cookies?.[RT_COOKIE] as string | undefined) ?? (req.body as { refreshToken?: string }).refreshToken;
+  const fail = (msg: string) => { clearRefreshCookie(req, res); return Err.unauthorized(msg); };
+  if (!token) throw fail('Not signed in');
+  let claims;
+  try { claims = verifyRefresh(token); } catch { throw fail('Invalid refresh token'); }
+  const session = await prisma.session.findUnique({ where: { refreshToken: hashToken(token) } });
+  const now = new Date();
+  if (!session || session.userId !== claims.sub || session.expiresAt < now) throw fail('Session expired');
+
+  const user = await prisma.user.findUnique({ where: { id: session.userId } });
+  if (!user || user.status === 'SUSPENDED') throw fail('User unavailable');
+  const access = () => signAccess({ sub: user.id, email: user.email, role: user.role });
+
+  if (session.revokedAt) {
+    if (session.rotatedAt && now.getTime() - session.rotatedAt.getTime() < ROTATION_GRACE_MS) {
+      // another tab refreshed a moment ago; the browser already holds the new cookie
+      res.json({ success: true, data: { accessToken: access() }, error: null });
+      return;
+    }
+    if (session.rotatedAt) {
+      await prisma.session.updateMany({ where: { userId: user.id, revokedAt: null }, data: { revokedAt: now } });
+      await audit({ actorId: user.id, action: 'REFRESH_TOKEN_REUSE', entityType: 'User', entityId: user.id, ipAddress: req.ip, userAgent: req.headers['user-agent'] });
+    }
+    throw fail('Session expired');
+  }
+
+  // rotate: retire this token (once — a parallel request loses the race and gets the grace path)
+  const claimed = await prisma.session.updateMany({ where: { id: session.id, revokedAt: null }, data: { revokedAt: now, rotatedAt: now } });
+  if (claimed.count) setRefreshCookie(req, res, await createSession(req, user.id, session.persistent), session.persistent);
+  res.json({ success: true, data: { accessToken: access() }, error: null });
 }));
 
 r.post('/logout', ah(async (req, res) => {
-  const { refreshToken } = (req.body ?? {}) as { refreshToken?: string };
-  if (refreshToken) await prisma.session.updateMany({ where: { refreshToken }, data: { revokedAt: new Date() } });
+  const token = (req.cookies?.[RT_COOKIE] as string | undefined) ?? (req.body as { refreshToken?: string } | undefined)?.refreshToken;
+  if (token) await prisma.session.updateMany({ where: { refreshToken: hashToken(token) }, data: { revokedAt: new Date() } });
+  clearRefreshCookie(req, res);
   res.json({ success: true, data: { ok: true }, error: null });
 }));
 

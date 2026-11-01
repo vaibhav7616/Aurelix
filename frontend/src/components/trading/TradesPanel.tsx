@@ -8,6 +8,7 @@ import { fmtHMS, fmtDur, secondsLeft, previewOutcome, type OptionTrade, type Pen
 import { getAssetMeta } from '../../lib/assetMeta';
 import { Empty, TableSkeleton } from '../ui/primitives';
 import { clsx } from 'clsx';
+import { useShallow } from 'zustand/react/shallow';
 
 function useNow(ms = 250) {
   const [now, setNow] = useState(Date.now());
@@ -49,7 +50,7 @@ function Ring({ frac, tone }: { frac: number; tone: 'up' | 'down' | 'flat' }) {
 
 /** Compact card list — used in the right rail under the ticket (like Quotex's "Trades" tab). */
 export function OpenTradesList({ accountId }: { accountId?: string | null }) {
-  const { ticks } = useTerminal();
+  const { ticks } = useTerminal(useShallow((s) => ({ ticks: s.ticks })));
   const now = useNow();
   const { data, isLoading } = useQuery({
     queryKey: ['options', 'open', accountId],
@@ -99,7 +100,7 @@ export function OpenTradesList({ accountId }: { accountId?: string | null }) {
 
 /** Active pending trades (execution by price) with cancel — shown above the running trades. */
 export function PendingTradesList({ accountId }: { accountId?: string | null }) {
-  const { ticks } = useTerminal();
+  const { ticks } = useTerminal(useShallow((s) => ({ ticks: s.ticks })));
   const qc = useQueryClient();
   const push = useUI((s) => s.push);
   const { data } = useQuery({
@@ -140,7 +141,7 @@ export function PendingTradesList({ accountId }: { accountId?: string | null }) 
 
 /** Full-width table (positions tab in the workspace + /positions page). */
 export function OpenTradesTable({ compact = false }: { compact?: boolean }) {
-  const { accountId, ticks } = useTerminal();
+  const { accountId, ticks } = useTerminal(useShallow((s) => ({ accountId: s.accountId, ticks: s.ticks })));
   const now = useNow();
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['options', 'open', accountId],
@@ -190,7 +191,7 @@ export function OpenTradesTable({ compact = false }: { compact?: boolean }) {
 
 /** Settled trades. */
 export function TradeHistoryTable({ pageSize = 30, compact = false }: { pageSize?: number; compact?: boolean }) {
-  const { accountId } = useTerminal();
+  const { accountId } = useTerminal(useShallow((s) => ({ accountId: s.accountId })));
   const { data, isLoading } = useQuery({
     queryKey: ['options', 'history', accountId, pageSize],
     queryFn: () => get<{ items: OptionTrade[] }>('/api/v1/options/history', { pageSize, ...(accountId ? { accountId } : {}) }),

@@ -38,6 +38,8 @@ interface TerminalState {
   setChartType: (t: 'candles' | 'line' | 'area') => void;
   setAccountId: (id: string | null) => void;
   applyTick: (t: Tick) => void;
+  /** apply many quotes in ONE store update (the socket batches the stream ~10×/s) */
+  applyTicks: (ts: Tick[]) => void;
   applyCandleEvent: (c: LiveCandle) => void;
   setClockOffset: (ms: number) => void;
   toggleFavorite: (s: string) => void;
@@ -90,6 +92,17 @@ export const useTerminal = create<TerminalState>((set) => ({
     const sample = t.ts - Date.now();
     const off = s.clockOffset === 0 ? sample : s.clockOffset * 0.9 + sample * 0.1;
     return { ticks: { ...s.ticks, [t.symbol]: t }, lastQuoteAt: Date.now(), clockOffset: Math.abs(off - s.clockOffset) > 5 ? off : s.clockOffset };
+  }),
+  applyTicks: (batch) => set((s) => {
+    if (!batch.length) return {};
+    const ticks = { ...s.ticks };
+    let off = s.clockOffset;
+    for (const t of batch) {
+      ticks[t.symbol] = t;
+      const sample = t.ts - Date.now();
+      off = off === 0 ? sample : off * 0.9 + sample * 0.1;
+    }
+    return { ticks, lastQuoteAt: Date.now(), clockOffset: Math.abs(off - s.clockOffset) > 5 ? off : s.clockOffset };
   }),
   applyCandleEvent: (c) => set((s) => ({ candleEvents: { ...s.candleEvents, [`${c.symbol}|${c.timeframe}`]: c } })),
   setClockOffset: (clockOffset) => set({ clockOffset }),

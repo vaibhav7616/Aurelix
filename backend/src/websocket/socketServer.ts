@@ -47,6 +47,8 @@ export function initSocket(httpServer: HttpServer): Server {
     socket.on('market:subscribe', (symbols: string[]) => {
       if (!Array.isArray(symbols)) return;
       for (const s of symbols.slice(0, 30)) {
+        // cap rooms per connection: repeated subscribe calls must not grow server memory without bound
+        if (socket.rooms.size >= 40) break;
         if (typeof s === 'string' && /^[A-Z\/]{3,20}$/.test(s)) void socket.join(`asset:${s}`);
       }
     });
@@ -68,8 +70,32 @@ export function emitToUser(userId: string, event: string, payload: unknown): voi
   try { io?.to(`user:${userId}`).emit(event, payload); } catch { /* ignore */ }
 }
 
-export function broadcastTick(tick: Tick): void {
+// Quote fan-out is throttled per symbol: the feed can move every few ms, clients only need ~10
+// updates/s (the chart glides between them). The LATEST quote is always delivered (trailing send).
+// Settlement and pending triggers use the provider's own price history, never these broadcasts.
+const TICK_BROADCAST_MS = 100;
+const lastSentAt = new Map<string, number>();
+const pendingTick = new Map<string, Tick>();
+const trailing = new Map<string, NodeJS.Timeout>();
+
+function sendTick(tick: Tick): void {
+  lastSentAt.set(tick.symbol, Date.now());
   try { io?.to(`asset:${tick.symbol}`).emit('market:tick', tick); } catch { /* ignore */ }
+}
+
+export function broadcastTick(tick: Tick): void {
+  const since = Date.now() - (lastSentAt.get(tick.symbol) ?? 0);
+  if (since >= TICK_BROADCAST_MS && !trailing.has(tick.symbol)) { sendTick(tick); return; }
+  pendingTick.set(tick.symbol, tick);
+  if (trailing.has(tick.symbol)) return;
+  const timer = setTimeout(() => {
+    trailing.delete(tick.symbol);
+    const t = pendingTick.get(tick.symbol);
+    pendingTick.delete(tick.symbol);
+    if (t) sendTick(t);
+  }, Math.max(0, TICK_BROADCAST_MS - since));
+  timer.unref?.();
+  trailing.set(tick.symbol, timer);
 }
 
 export function emitCandle(symbol: string, candle: unknown): void {

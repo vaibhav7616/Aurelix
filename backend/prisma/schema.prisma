@@ -146,6 +146,10 @@ model Session {
   expiresAt    DateTime
   createdAt    DateTime  @default(now())
   revokedAt    DateTime?
+  /// set when the refresh token was exchanged for a new one (rotation); a later use of it is theft
+  rotatedAt    DateTime?
+  /// "remember me": the refresh cookie survives a browser restart
+  persistent   Boolean   @default(true)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

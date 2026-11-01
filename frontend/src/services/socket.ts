@@ -8,12 +8,28 @@ import { soundService } from '../lib/sound';
 import { useSettlementStore } from '../stores/settlementStore';
 
 let socket: Socket | null = null;
+
+// Quotes arrive many times a second per instrument; keep the latest per symbol and push them into
+// the store in one update every ~100ms, so React re-renders at a steady rate instead of per message.
+const pendingTicks = new Map<string, Tick>();
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+function queueTick(t: Tick): void {
+  pendingTicks.set(t.symbol, t);
+  if (flushTimer) return;
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    const batch = [...pendingTicks.values()];
+    pendingTicks.clear();
+    useTerminal.getState().applyTicks(batch);
+  }, 100);
+}
 let subscribed: string[] = [];
 
 export function connectSocket(): Socket {
   if (socket) return socket;
   socket = io(WS_URL || undefined, {
-    auth: { token: getAccessToken() },
+    // a function, so every (re)connect sends the CURRENT access token, not the one from page load
+    auth: (cb) => cb({ token: getAccessToken() }),
     // start with long-polling (works through any proxy) and upgrade to websocket when possible —
     // the quote stream must never depend on a proxy allowing WS upgrades
     transports: ['polling', 'websocket'],
@@ -34,9 +50,7 @@ export function connectSocket(): Socket {
     if (wasConnected) void queryClient.invalidateQueries({ queryKey: ['candles'] });
     wasConnected = true;
   });
-  socket.on('market:tick', (t: Tick) => {
-    useTerminal.getState().applyTick(t);
-  });
+  socket.on('market:tick', (t: Tick) => queueTick(t));
   // server closed a candle / opened the next one — the chart rolls its live bar on this exact event
   socket.on('market:candle', (c: LiveCandle) => {
     if (c && (c.event === 'open' || c.event === 'close')) useTerminal.getState().applyCandleEvent(c);
@@ -132,7 +146,7 @@ function startQuoteWatchdog() {
       const res = await fetch(`/api/v1/market/ticks?symbols=${encodeURIComponent(subscribed.join(','))}`, { headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` } });
       if (res.ok) {
         const body = await res.json() as { data?: { ticks?: Tick[] } };
-        for (const t of body.data?.ticks ?? []) st.applyTick(t);
+        st.applyTicks(body.data?.ticks ?? []);
       }
     } catch { /* offline */ } finally { pulling = false; }
   }, 1000);

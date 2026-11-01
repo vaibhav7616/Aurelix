@@ -3,29 +3,24 @@ import { API_URL } from './constants';
 
 export interface Envelope<T> { success: boolean; data: T; error: { code: string; message: string; details?: unknown } | null }
 
-const K_A = 'ax_access';
-const K_R = 'ax_refresh';
+// Session model:
+//   refresh token → HttpOnly cookie set by the server (scripts can never read it)
+//   access token  → memory only (lost on reload; renewed from the cookie)
+//   ax_session    → non-secret "a session may exist" flag, so the app knows to try a silent refresh
+const K_SESSION = 'ax_session';
 const K_M = 'ax_remember'; // '1' | '0', always in localStorage
+const LEGACY = ['ax_access', 'ax_refresh'];
 
-const api = axios.create({ baseURL: API_URL, withCredentials: false, timeout: 15000 });
+const api = axios.create({ baseURL: API_URL, withCredentials: true, timeout: 15000 });
 
 let accessToken: string | null = null;
-let refreshToken: string | null = null;
-
-function chosenStore(): Storage {
-  try {
-    return localStorage.getItem(K_M) === '0' ? sessionStorage : localStorage;
-  } catch {
-    return localStorage;
-  }
-}
-function readInitial(): void {
-  try {
-    accessToken = localStorage.getItem(K_A) ?? sessionStorage.getItem(K_A);
-    refreshToken = localStorage.getItem(K_R) ?? sessionStorage.getItem(K_R);
-  } catch { /* private mode */ }
-}
-readInitial();
+/** refresh token from the pre-cookie version (localStorage): exchanged once for a cookie, then dropped */
+let legacyRefresh: string | null = null;
+try {
+  legacyRefresh = localStorage.getItem('ax_refresh') ?? sessionStorage.getItem('ax_refresh');
+  if (legacyRefresh) localStorage.setItem(K_SESSION, '1');
+  for (const k of LEGACY) { localStorage.removeItem(k); sessionStorage.removeItem(k); }
+} catch { /* storage unavailable */ }
 
 export function isRemembered(): boolean {
   try {
@@ -35,52 +30,60 @@ export function isRemembered(): boolean {
   }
 }
 
-/** Persist tokens. `remember=false` keeps the session to this tab only (sessionStorage). */
-export function setTokens(a: string | null, r?: string | null, remember?: boolean) {
+/** True when this browser may hold a session cookie (the cookie itself is unreadable by design). */
+export function hasSession(): boolean {
+  try { return (localStorage.getItem(K_SESSION) ?? sessionStorage.getItem(K_SESSION)) === '1'; } catch { return false; }
+}
+
+/** Signed in: keep the access token in memory and remember that a session cookie exists. */
+export function setSession(a: string, remember: boolean) {
   accessToken = a;
-  if (r !== undefined) refreshToken = r;
   try {
-    if (remember !== undefined) localStorage.setItem(K_M, remember ? '1' : '0');
-    const store = chosenStore();
-    const other = store === localStorage ? sessionStorage : localStorage;
-    if (a) store.setItem(K_A, a);
-    else { store.removeItem(K_A); other.removeItem(K_A); }
-    if (r) store.setItem(K_R, r);
-    else if (r === null) { store.removeItem(K_R); other.removeItem(K_R); }
+    localStorage.setItem(K_M, remember ? '1' : '0');
+    (remember ? localStorage : sessionStorage).setItem(K_SESSION, '1');
   } catch { /* ignore */ }
 }
+export function clearSession() {
+  accessToken = null;
+  legacyRefresh = null;
+  try { localStorage.removeItem(K_SESSION); sessionStorage.removeItem(K_SESSION); } catch { /* ignore */ }
+}
 export function getAccessToken(): string | null { return accessToken; }
+
+/** New access token from the refresh cookie (the server also rotates the cookie). One request at a time. */
+let inflight: Promise<string> | null = null;
+export function refreshAccess(): Promise<string> {
+  inflight ??= axios
+    .post<Envelope<{ accessToken: string }>>(`${API_URL}/api/v1/auth/refresh`, legacyRefresh ? { refreshToken: legacyRefresh } : {}, { withCredentials: true })
+    .then(({ data }) => {
+      accessToken = data.data.accessToken;
+      legacyRefresh = null;
+      return accessToken;
+    })
+    .finally(() => { inflight = null; });
+  return inflight;
+}
 
 api.interceptors.request.use((cfg) => {
   if (accessToken) cfg.headers.Authorization = `Bearer ${accessToken}`;
   return cfg;
 });
 
-let refreshing = false;
-let queue: Array<() => void> = [];
 api.interceptors.response.use(
   (res) => res,
   async (err: AxiosError) => {
     const original = err.config as (typeof err.config & { _retried?: boolean }) | undefined;
-    if (err.response?.status === 401 && original && !original._retried && refreshToken) {
+    const isAuthCall = original?.url?.includes('/api/v1/auth/');
+    if (err.response?.status === 401 && original && !original._retried && !isAuthCall && hasSession()) {
       original._retried = true;
-      if (refreshing) await new Promise<void>((resolve) => queue.push(resolve));
-      else {
-        refreshing = true;
-        try {
-          const { data } = await axios.post<Envelope<{ accessToken: string }>>(`${API_URL}/api/v1/auth/refresh`, { refreshToken });
-          setTokens(data.data.accessToken);
-        } catch {
-          setTokens(null, null);
-          window.location.href = '/login';
-          return Promise.reject(err);
-        } finally {
-          refreshing = false;
-          queue.forEach((fn) => fn());
-          queue = [];
-        }
+      try {
+        await refreshAccess();
+      } catch {
+        clearSession();
+        window.location.href = '/login';
+        return Promise.reject(err);
       }
-      if (accessToken && original.headers) original.headers.Authorization = `Bearer ${accessToken}`;
+      if (original.headers) original.headers.Authorization = `Bearer ${accessToken}`;
       return api(original);
     }
     return Promise.reject(err);

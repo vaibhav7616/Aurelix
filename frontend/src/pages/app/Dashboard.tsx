@@ -6,6 +6,7 @@ import { useTerminal } from '../../stores/terminalStore';
 import { Card, SectionTitle, Empty } from '../../components/ui/primitives';
 import { fmtMoney, fmtPrice, fmtPct, clsUpDown, fmtTime } from '../../lib/format';
 import { clsx } from 'clsx';
+import { useShallow } from 'zustand/react/shallow';
 
 interface Stats { balance: number; available: number; equity: number }
 interface OptStats { openTrades: number; inTrade: number; totalTrades: number; wins: number; losses: number; ties: number; winRate: number; todayPnl: number; totalPnl: number; turnover: number }
@@ -80,7 +81,7 @@ function PerformancePanel() {
 }
 
 export function Dashboard() {
-  const { accountId, setAccountId } = useTerminal();
+  const { accountId, setAccountId } = useTerminal(useShallow((s) => ({ accountId: s.accountId, setAccountId: s.setAccountId })));
   const { data: accounts } = useQuery({ queryKey: ['accounts'], queryFn: () => get<Account[]>('/api/v1/accounts'), refetchInterval: 10000 });
   const id = accountId ?? accounts?.[0]?.id;
   const { data: s } = useQuery({ queryKey: ['stats', id], queryFn: () => get<Stats>(`/api/v1/accounts/${id}/stats`), enabled: !!id, refetchInterval: 5000 });
